@@ -1,0 +1,29 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * @file
+ * Functions to support theming in the STARTER theme.
+ */
+
+/**
+ * Implements hook_preprocess_HOOK() for html.html.twig.
+ */
+function STARTER_preprocess_html(array &$variables): void {
+  // Add custom classes or variables for the <html> element.
+}
+
+/**
+ * Implements hook_preprocess_HOOK() for page.html.twig.
+ */
+function STARTER_preprocess_page(array &$variables): void {
+  // Add custom variables for the page template.
+}
+
+/**
+ * Implements hook_preprocess_HOOK() for node.html.twig.
+ */
+function STARTER_preprocess_node(array &$variables): void {
+  // Add custom variables for node templates.
+}

@@ -1,0 +1,20 @@
+name: STARTER
+type: theme
+description: 'Custom theme — rename STARTER to your theme name.'
+core_version_requirement: ^10 || ^11
+base theme: false
+
+regions:
+  header: Header
+  primary_menu: Primary menu
+  secondary_menu: Secondary menu
+  hero: Hero
+  breadcrumb: Breadcrumb
+  content: Content
+  sidebar: Sidebar
+  footer_first: Footer first
+  footer_second: Footer second
+  footer: Footer
+
+libraries:
+  - STARTER/global

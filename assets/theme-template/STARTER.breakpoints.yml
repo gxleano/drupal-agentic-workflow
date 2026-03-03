@@ -1,0 +1,19 @@
+STARTER.mobile:
+  label: Mobile
+  mediaQuery: '(min-width: 0px)'
+  weight: 0
+  multipliers:
+    - 1x
+STARTER.narrow:
+  label: Narrow
+  mediaQuery: '(min-width: 560px)'
+  weight: 1
+  multipliers:
+    - 1x
+STARTER.wide:
+  label: Wide
+  mediaQuery: '(min-width: 1024px)'
+  weight: 2
+  multipliers:
+    - 1x
+    - 2x

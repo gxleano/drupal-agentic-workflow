@@ -1,0 +1,51 @@
+{#
+/**
+ * @file
+ * Theme override to display a single page.
+ *
+ * Available variables:
+ * - page: The rendered page regions (header, content, sidebar, footer, etc.)
+ *
+ * @see template_preprocess_page()
+ */
+#}
+
+<header class="header" role="banner">
+  {{ page.header }}
+  {% if page.primary_menu %}
+    <nav class="header__nav" role="navigation" aria-label="{{ 'Main navigation'|t }}">
+      {{ page.primary_menu }}
+    </nav>
+  {% endif %}
+</header>
+
+{% if page.hero %}
+  <section class="hero">
+    {{ page.hero }}
+  </section>
+{% endif %}
+
+{% if page.breadcrumb %}
+  {{ page.breadcrumb }}
+{% endif %}
+
+<main class="content" role="main">
+  <a id="main-content" tabindex="-1"></a>
+  {{ page.content }}
+</main>
+
+{% if page.sidebar %}
+  <aside class="sidebar" role="complementary">
+    {{ page.sidebar }}
+  </aside>
+{% endif %}
+
+<footer class="footer" role="contentinfo">
+  {% if page.footer_first or page.footer_second %}
+    <div class="footer__top">
+      {{ page.footer_first }}
+      {{ page.footer_second }}
+    </div>
+  {% endif %}
+  {{ page.footer }}
+</footer>

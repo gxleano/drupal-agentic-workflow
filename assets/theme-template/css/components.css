@@ -1,0 +1,33 @@
+/**
+ * @file
+ * Component styles using BEM naming convention.
+ */
+
+/* Header */
+.header {
+  padding: 1rem;
+  background-color: #f5f5f5;
+  border-bottom: 1px solid #ddd;
+}
+
+.header__logo {
+  display: inline-block;
+}
+
+/* Content */
+.content {
+  max-width: 80rem;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+/* Footer */
+.footer {
+  padding: 2rem 1rem;
+  background-color: #1a1a1a;
+  color: #fff;
+}
+
+.footer a {
+  color: #8bb8e8;
+}
