@@ -313,6 +313,63 @@ $fields['email'] = BaseFieldDefinition::create('email')
   ->addConstraint('UserMailUnique');
 ```
 
+## SSRF Prevention
+
+**Rule: Never let user input control URLs that the server fetches.**
+
+```php
+// UNSAFE — user input directly in URL
+$response = $this->httpClient->get($request->query->get('url'));
+
+// SAFE — validate URL, block internal IPs, set timeouts
+use Drupal\Component\Utility\UrlHelper;
+if (!UrlHelper::isValid($url, TRUE)) {
+  throw new BadRequestHttpException('Invalid URL.');
+}
+$response = $this->httpClient->get($url, [
+  'timeout' => 10,
+  'max_redirects' => 3,
+]);
+```
+
+Key rules:
+- Validate URLs with `UrlHelper::isValid()` and restrict to http/https
+- Block internal IP ranges (10.x, 172.16.x, 192.168.x, 127.x)
+- Never pass user input to `file_get_contents()`, `fopen()`, or PHP stream wrappers
+- Set timeouts and redirect limits on all outbound requests
+
+## Secure Design
+
+**Rule: Design with security defaults. Permissions should be granular and deny by default.**
+
+- Use verb + object pattern for permissions (`edit own article content`, not `access module`)
+- Every custom entity type MUST have an access handler
+- Business logic in services, not controllers — controllers only coordinate
+- Secure defaults in config (opt-in for permissive settings, not opt-out)
+- Never hardcode business rules that should be permission-based
+
+## Software Integrity
+
+**Rule: Never execute or include code based on user input.**
+
+```php
+// UNSAFE — dynamic code execution
+eval($user_code);
+assert($user_input);
+$func = $request->get('callback'); $func();
+include "/templates/{$request->get('tpl')}.php";
+
+// SAFE — whitelist allowed values
+$allowed = ['default', 'compact', 'detailed'];
+$tpl = in_array($value, $allowed, TRUE) ? $value : 'default';
+```
+
+Additional integrity checks:
+- Run `composer audit` in CI/CD pipeline
+- Commit `composer.lock` for deterministic builds
+- Use `drupal/core-security-advisories` to block vulnerable packages
+- Never use `unserialize()` on user-provided data
+
 ## Red Flag Patterns
 
 | Pattern | Risk | Safe Alternative |
@@ -323,8 +380,14 @@ $fields['email'] = BaseFieldDefinition::create('email')
 | Route without `_permission`/`_access` | Unauthorized access | Add access requirements |
 | `\|raw` in Twig with variable data | XSS | Remove `\|raw`, use auto-escaping |
 | Hardcoded API keys or passwords | Credential exposure | Environment variables |
-| `eval()` / `exec()` / `system()` | Code/command injection | Symfony Process or alternatives |
+| `eval()` / `assert()` / `create_function()` | Code execution | Refactor logic, use callbacks |
+| `exec()` / `system()` / `shell_exec()` | Command injection | Symfony Process |
 | `unserialize()` on user data | Object injection | `json_decode()` |
+| `md5()` / `sha1()` for passwords | Weak hashing | `password_hash()` with PASSWORD_DEFAULT |
+| `rand()` / `mt_rand()` for tokens | Predictable random | `Crypt::randomBytesBase64()` |
+| `file_get_contents($user_url)` | SSRF | Validate URL, block internal IPs |
+| `include`/`require` with variable path | Local file inclusion | Whitelist allowed paths |
+| `extract($user_data)` | Variable injection | Explicit array access |
 
 ## Pre-Commit Security Checklist
 
@@ -346,6 +409,7 @@ Before committing any code, verify:
 | Reference | When to read | File |
 |-----------|-------------|------|
 | **Security Checklist** | OWASP mapping, code examples, review procedure, advisory monitoring | `references/security-checklist.md` |
+| **Advanced Patterns** | SSRF details, secure design, cryptographic failures, dependency security, logging, auth hardening, production config | `references/advanced-security-patterns.md` |
 
 ## Related Skills
 

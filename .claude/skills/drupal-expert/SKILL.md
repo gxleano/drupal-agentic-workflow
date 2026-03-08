@@ -131,79 +131,11 @@ my_module/
 
 ## Common Patterns
 
-### Service Definition
-```yaml
-services:
-  my_module.my_service:
-    class: Drupal\my_module\Service\MyService
-    arguments: ['@entity_type.manager', '@current_user', '@logger.factory']
-```
+For detailed code examples of common patterns (services, routes, plugins, config schema, database queries, cache metadata, forms, queue workers), load the reference file on demand:
 
-### Route with Permission
-```yaml
-my_module.page:
-  path: '/my-page'
-  defaults:
-    _controller: '\Drupal\my_module\Controller\MyController::content'
-    _title: 'My Page'
-  requirements:
-    _permission: 'access content'
-```
-
-### Plugin (Block Example)
-```php
-#[Block(
-  id: "my_block",
-  admin_label: new TranslatableMarkup("My Block"),
-)]
-class MyBlock extends BlockBase implements ContainerFactoryPluginInterface {
-  // Always use ContainerFactoryPluginInterface for DI in plugins
-}
-```
-
-### Config Schema (Required!)
-```yaml
-# config/schema/my_module.schema.yml
-my_module.settings:
-  type: config_object
-  label: 'My Module settings'
-  mapping:
-    enabled:
-      type: boolean
-      label: 'Enabled'
-```
-
-## Database Queries
-
-Always use the database abstraction layer:
-
-```php
-// CORRECT - parameterized query
-$query = $this->database->select('node', 'n');
-$query->fields('n', ['nid', 'title']);
-$query->condition('n.type', $type);
-$results = $query->execute();
-
-// NEVER do this - SQL injection risk
-$result = $this->database->query("SELECT * FROM node WHERE type = '$type'");
-```
-
-## Cache Metadata
-
-**Always add cache metadata to render arrays:**
-
-```php
-$build['content'] = [
-  '#markup' => $content,
-  '#cache' => [
-    'tags' => ['node_list', 'user:' . $uid],
-    'contexts' => ['user.permissions', 'url.query_args'],
-    'max-age' => 3600,
-  ],
-];
-```
-
-Cache tag conventions: `node:123` (specific), `node_list` (any list), `config:my_module.settings` (config).
+| Reference | File |
+|-----------|------|
+| **Common Patterns** | `references/common-patterns.md` |
 
 ## Essential Drush Commands
 

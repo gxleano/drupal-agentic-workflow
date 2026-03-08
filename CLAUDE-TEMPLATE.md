@@ -1,7 +1,7 @@
-# Drupal 11 Rules for CLAUDE.md
+# Drupal 11 Coding Rules — Template
 
-> These rules are automatically appended to your project's `CLAUDE.md` by `setup.sh`.
-> Replace placeholder values marked with `{...}` with your project details.
+> This file is the source of managed rules injected into your project's `CLAUDE.md`.
+> Lines 1-3 are skipped by setup.sh. Content below the `---` is what gets inserted.
 
 ---
 
@@ -38,6 +38,10 @@
 - Document array structures (`@param array{key: type}`), side effects, and `@throws`
 - `{@inheritdoc}` for overridden methods
 
+### Testing
+- Tests are expected for production code — use `/generate-tests` to scaffold them
+- Unit tests for services with pure logic, Kernel tests for entity/DB interactions, Functional tests for user workflows
+
 ### Caching
 - All render arrays must include `#cache` metadata (tags, contexts, max-age)
 - Use `Cache::mergeTags()` / `Cache::mergeContexts()` to combine
@@ -48,98 +52,33 @@
 - Sanitize user input: `$this->t()`, `Xss::filter()`, `Html::escape()`
 - In JS: `Drupal.checkPlain()` for any user-controlled data inserted into DOM
 
-## Code Quality
+## Common Mistakes to Avoid
 
-Enforced at two levels:
-1. **Post-generation hook** (`.claude/hooks/`) — on every file Write/Edit:
-   - **Prettier** — Formats JS/TS, CSS/SCSS, Twig, YAML, JSON before linting (optional, skipped if not installed)
-   - **phpcs** — Drupal + DrupalPractice coding standards (via ddev)
-   - **eslint** — JavaScript/TypeScript linting
-   - **stylelint** — CSS/SCSS linting
-   - **security scan** — `eval()`, `shell_exec()`, `$_GET`, `unserialize()`, `extract()` (local grep, instant)
-   - **performance scan** — `\Drupal::` in `src/`, missing `accessCheck()` on entity queries (local grep, instant)
-2. **Manual** — run checks explicitly when needed
+1. Missing `accessCheck()` on entity queries
+2. Using `\Drupal::` in service classes — inject via constructor
+3. Missing `#cache` on render arrays
+4. `@Block` annotation instead of `#[Block]` attribute
+5. Hooks in `.module` that should be in `src/Hook/`
+6. Missing config schema for custom config
+7. `switch` instead of `match` for simple conditionals
+8. `self` instead of `static` in `create()` methods
+9. Missing `declare(strict_types=1)` on new PHP files
+10. Business logic in controllers/hooks instead of services
 
-**IMPORTANT**: When generating or modifying PHP code for custom modules, Claude Code must:
+## Skills Reference
 
-1. **Generate the code** following Drupal coding standards
-2. **Immediately run phpcbf** to auto-fix violations:
-   ```bash
-   ddev exec phpcbf --standard=Drupal,DrupalPractice --extensions=php,module,inc,install,test,profile,theme web/modules/custom/{module_name}
-   ```
-3. **Verify with phpcs** to ensure no remaining violations:
-   ```bash
-   ddev exec phpcs --standard=Drupal,DrupalPractice --extensions=php,module,inc,install,test,profile,theme web/modules/custom/{module_name}
-   ```
-4. **Optional: Run PHPStan** for static analysis (when requested or for critical code):
-   ```bash
-   ddev exec phpstan analyze web/modules/custom/{module_name}
-   ```
+Use slash commands for detailed guidance instead of repeating knowledge here:
 
-## Custom Modules
-
-Located in `web/modules/custom/`. Each module has an `AI_CONTEXT.md` file — **read it first** before exploring module code. It provides architecture, class map, data flow, and key decisions that save significant time vs. reading all source files.
-
-<!-- List your custom modules here. Example format:
-- **my_module**: Brief description — [AI_CONTEXT.md](web/modules/custom/my_module/AI_CONTEXT.md)
--->
-
-## Installed Contributed Modules/Themes
-
-<!-- List your installed contrib modules/themes here. Example format:
-- **drupal/gin** ^5.0: Modern admin theme
-- **drupal/token** ^1.17: Token support
-- **cweagans/composer-patches** ^1.7: Composer patching
--->
-
-## Frontend / Theming
-
-### Twig Templates
-- Auto-escaped by default — never use `|raw` with user-controlled data
-- Use `{{ attach_library('theme/library-name') }}` for CSS/JS
-- Use `{% trans %}` for translatable strings
-- Template naming: `node--{type}--{viewmode}.html.twig`
-- Use `{{ dump() }}` for debugging (with Twig debug enabled)
-
-### Single Directory Components (SDC)
-- Available in Drupal 10.1+, stable in 10.3+
-- Components live in `components/{name}/` with `*.component.yml` schema
-- Use `/drupal-frontend-expert` for SDC guidance
-
-### CSS/JS Libraries
-- Define in `*.libraries.yml`, attach via `{{ attach_library() }}`
-- Use `Drupal.behaviors` with `once()` for JS initialization
-- jQuery-free patterns preferred for new code
-
-### Prettier Formatting
-- `.prettierrc.json` handles JS/TS, CSS/SCSS, Twig, YAML, JSON (not PHP)
-- Runs automatically in the post-generation hook when installed
-- Install: `npm install --save-dev prettier`
-- For Twig: `npm install --save-dev prettier-plugin-twig-melody`
-
-## Security
-
-Proactive security is enforced during development via the `drupal-security` skill:
-
-- **Never** use `|raw` in Twig with user-controlled variables
-- **Never** concatenate user input into SQL queries — use the query builder
-- **Always** use `->accessCheck(TRUE)` on entity queries
-- **Always** add access requirements to routes (`_permission` or `_access`)
-- **Prefer** `#plain_text` over `#markup` for user-controlled output
-- **Use** environment variables for secrets, never hardcode credentials
-- **Use** Form API for all forms (automatic CSRF protection)
-
-Use `/drupal-security` for detailed guidance on specific security patterns.
-
-## JavaScript
-
-ESLint configuration in `web/core/.eslintrc.json`:
-- Airbnb base + Prettier
-- ECMAScript 2020
-- Drupal globals (Drupal, drupalSettings, jQuery)
-
-## NEVER Commit
-
-- `web/sites/default/settings.local.php`
-- `.ddev/.env` or any secret values
-- `vendor/` directory
+| Need | Skill |
+|------|-------|
+| Drupal development patterns, DI, testing | `/drupal-expert` |
+| Twig, SDC, theming, CSS/JS, a11y | `/drupal-frontend-expert` |
+| XSS, SQL injection, access control, CSRF | `/drupal-security` |
+| Views, content types, Layout Builder | `/drupal-site-builder-expert` |
+| Config export/import, Config Split, Recipes | `/config-management` |
+| Caching, queries, BigPipe, profiling | `/performance` |
+| Generate modules, services, plugins, forms | `/scaffold` |
+| Troubleshoot hooks, services, cache, routes | `/debug` |
+| Code smells, god classes, anti-patterns | `/refactor` |
+| Safe contrib module updates | `/update-module` |
+| Migration management | `/migrate` |
