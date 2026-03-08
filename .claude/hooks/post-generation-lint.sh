@@ -132,6 +132,21 @@ if is_backend; then
   # Make the path relative to the project for ddev commands.
   REL_PATH="${FILE_PATH#"$PROJECT_DIR"/}"
 
+  # --- PHPCBF (auto-fix) ---
+  log_tool_start "phpcbf"
+  TOOLS_RUN+=("phpcbf")
+  PHPCBF_OUTPUT=""
+  PHPCBF_EXIT=0
+  PHPCBF_OUTPUT=$(ddev exec phpcbf --standard=Drupal,DrupalPractice \
+    --extensions=php,module,inc,install,test,profile,theme \
+    "$REL_PATH" 2>&1) || PHPCBF_EXIT=$?
+
+  # phpcbf exit 1 = fixes applied (success), exit 2 = unfixable errors
+  if [[ "$PHPCBF_EXIT" -eq 1 ]]; then
+    echo "  phpcbf: auto-fixed coding standard violations" >&2
+  fi
+  log_tool_result "phpcbf" 0  # phpcbf is best-effort, not a blocker
+
   # --- PHPCS ---
   log_tool_start "phpcs"
   TOOLS_RUN+=("phpcs")

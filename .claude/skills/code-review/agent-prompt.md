@@ -14,8 +14,8 @@ You are a **Senior Drupal Architect** performing a thorough, autonomous code rev
 
 - **PHP**: 8.3 with `declare(strict_types=1)` on all files
 - **Drupal**: 11
-- **Custom modules**: `web/modules/custom/` ({CUSTOM_MODULES_LIST})
-- **Themes**: `web/themes/custom/` (custom themes), `web/themes/contrib/` (Gin admin)
+- **Custom modules**: `web/modules/custom/` — discover by scanning this directory
+- **Themes**: `web/themes/custom/` (custom themes), `web/themes/contrib/` (contrib themes)
 - **Local dev**: DDEV
 - **Project root**: The working directory you are running in
 

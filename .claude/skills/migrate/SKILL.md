@@ -455,17 +455,14 @@ process:
 // web/modules/custom/<module>/src/Plugin/migrate/process/CustomProcess.php
 namespace Drupal\<module>\Plugin\migrate\process;
 
+use Drupal\migrate\Attribute\MigrateProcessPlugin;
 use Drupal\migrate\ProcessPluginBase;
 use Drupal\migrate\MigrateExecutableInterface;
 use Drupal\migrate\Row;
 
-/**
- * Custom migration process plugin.
- *
- * @MigrateProcessPlugin(
- *   id = "custom_process"
- * )
- */
+#[MigrateProcessPlugin(
+  id: 'custom_process',
+)]
 class CustomProcess extends ProcessPluginBase {
 
   public function transform($value, MigrateExecutableInterface $migrate_executable, Row $row, $destination_property) {
