@@ -65,6 +65,12 @@
 9. Missing `declare(strict_types=1)` on new PHP files
 10. Business logic in controllers/hooks instead of services
 
+<!-- Add project-specific lessons below. When Claude makes a mistake that gets corrected,
+     add it here so it won't repeat across sessions. Example:
+- Don't use X library for Y — use Z instead (learned 2025-03-01)
+- Our API returns paginated results — always handle pagination
+-->
+
 ## Skills Reference
 
 Use slash commands for detailed guidance instead of repeating knowledge here:
