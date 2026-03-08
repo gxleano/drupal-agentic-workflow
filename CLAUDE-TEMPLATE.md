@@ -81,4 +81,5 @@ Use slash commands for detailed guidance instead of repeating knowledge here:
 | Troubleshoot hooks, services, cache, routes | `/debug` |
 | Code smells, god classes, anti-patterns | `/refactor` |
 | Safe contrib module updates | `/update-module` |
+| Drush CLI commands, SQL, deprecated commands | `/drush` |
 | Migration management | `/migrate` |

@@ -1,6 +1,6 @@
 # Drupal Agentic Workflow for Claude Code
 
-> Turn Claude Code into a Drupal-native development partner with 15 AI-powered skills, automated code quality hooks, and security scanning.
+> Turn Claude Code into a Drupal-native development partner with 16 AI-powered skills, automated code quality hooks, and security scanning.
 
 ## Why Use This?
 
@@ -9,7 +9,7 @@
 | Claude generates code with coding standard violations | phpcbf auto-fixes violations before you see them |
 | Manual phpcs/phpstan runs after every change | Post-generation hook lints every file automatically |
 | No protection against destructive commands | Pre-bash guard blocks `git reset --hard`, `rm -rf`, etc. |
-| Generic AI responses about Drupal | 15 specialized skills with Drupal 10/11 expertise |
+| Generic AI responses about Drupal | 16 specialized skills with Drupal 10/11 expertise |
 | Security issues caught in code review | Security patterns scanned on every file save |
 
 ### What Happens When You Write Code
@@ -64,7 +64,7 @@ This generates a `CLAUDE.md` with auto-detected project info.
 
 This single command:
 - Checks for code quality tools (`drupal/coder`, `phpstan`) and offers to install them
-- Copies all 15 skills and hooks into `.claude/`
+- Copies all 16 skills and hooks into `.claude/`
 - Appends Drupal coding rules to your existing `CLAUDE.md`
 - Installs `.prettierrc.json` and `phpstan.neon`
 - Generates `AI_CONTEXT.md` templates for custom modules missing one
@@ -99,7 +99,7 @@ claude
 
 ## What's Included
 
-### Skills (15)
+### Skills (16)
 
 | Skill | Type | Purpose |
 |-------|------|---------|
@@ -117,6 +117,7 @@ claude
 | **update-module** | Inline | Safe contrib module update workflow |
 | **config-management** | Inline | Config export/import, Config Split, Recipes |
 | **performance** | Inline | Caching, queries, BigPipe, profiling |
+| **drush** | Inline | Drush CLI reference, SQL, PHP eval, deprecated commands |
 | **refactor** | Inline | Code smell detection and refactoring guidance |
 
 ### Hooks
@@ -147,6 +148,7 @@ Once set up, use skills via slash commands in Claude Code:
 /drupal-frontend-expert                # Theming and frontend help
 /drupal-site-builder-expert            # Site building guidance
 /drupal-security                       # Security review/guidance
+/drush                                 # Drush CLI reference and commands
 /update-module                         # Safe module update workflow
 /config-management                     # Config management guidance
 /performance                           # Performance optimization
@@ -326,6 +328,7 @@ your-drupal-project/
 │       ├── config-management/         # Config export/import, Config Split, Recipes
 │       ├── ddev/                      # DDEV environment management
 │       ├── debug/                     # Code-level troubleshooting
+│       ├── drush/                     # Drush CLI reference + deprecated commands
 │       ├── drupal-expert/             # Drupal knowledge base + references
 │       ├── drupal-frontend-expert/    # Twig, SDC, theming + references
 │       ├── drupal-security/           # Proactive security + checklist
