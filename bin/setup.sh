@@ -6,8 +6,9 @@
 #   TARGET_DIR    Path to a Drupal project root (default: current directory)
 #   --force       Skip Drupal project detection
 #   --dry-run     Show what would be done without making changes
-#   --skip-tools  Skip code quality tools detection/installation
-#   --help        Show this help message
+#   --skip-tools       Skip code quality tools detection/installation
+#   --skip-ai-context  Skip AI_CONTEXT.md generation prompt
+#   --help             Show this help message
 #
 # Phases:
 #   0. Validate target is a Drupal project (composer.json with drupal/core)
@@ -15,8 +16,9 @@
 #   2. Copy .claude/ directory (skills, hooks, settings)
 #   3. Append Drupal rules to CLAUDE.md (or create from template)
 #   4. Install .prettierrc.json (if missing)
-#   5. Scan web/modules/custom/ and create AI_CONTEXT.md templates for modules missing one
-#   6. Print summary with counts and next steps
+#   5. (Optional) Analyze web/modules/custom/ and generate AI_CONTEXT.md with real module info
+#   6. Update CLAUDE.md Custom Modules section with discovered modules
+#   7. Print summary with counts and next steps
 #
 # Idempotency rules:
 #   - File exists and matches source → "up to date"
@@ -62,6 +64,7 @@ TARGET_DIR=""
 FORCE=false
 DRY_RUN=false
 SKIP_TOOLS=false
+SKIP_AI_CONTEXT=false
 
 # ---------------------------------------------------------------------------
 # Usage
@@ -78,8 +81,9 @@ Arguments:
 Options:
   --force       Skip Drupal project detection
   --dry-run     Show what would be done without making changes
-  --skip-tools  Skip code quality tools detection/installation
-  --help        Show this help message
+  --skip-tools       Skip code quality tools detection/installation
+  --skip-ai-context  Skip AI_CONTEXT.md generation prompt
+  --help             Show this help message
 
 Phases:
   0. Validate target is a Drupal project (composer.json with drupal/core)
@@ -87,8 +91,9 @@ Phases:
   2. Copy .claude/ directory (skills, hooks, settings)
   3. Append Drupal rules to CLAUDE.md (or create from template)
   4. Install .prettierrc.json (if missing)
-  5. Scan web/modules/custom/ and create AI_CONTEXT.md templates
-  6. Print summary with counts and next steps
+  5. (Optional) Analyze custom modules and generate AI_CONTEXT.md files
+  6. Update CLAUDE.md Custom Modules section with discovered modules
+  7. Print summary with counts and next steps
 HELP
 }
 
@@ -107,6 +112,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-tools)
       SKIP_TOOLS=true
+      shift
+      ;;
+    --skip-ai-context)
+      SKIP_AI_CONTEXT=true
       shift
       ;;
     --help|-h)
@@ -547,93 +556,366 @@ install_file \
   "$TARGET_DIR/.prettierrc.json"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 5 — AI_CONTEXT.md for custom modules
+# Phase 5 — AI_CONTEXT.md for custom modules (interactive)
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
 echo "${BOLD}Phase 5: AI_CONTEXT.md for custom modules${RESET}"
 
 CUSTOM_MODULES_DIR="$TARGET_DIR/web/modules/custom"
+# Track discovered modules for Phase 6 (CLAUDE.md Custom Modules section).
+DISCOVERED_MODULES=()
 
-if [[ -d "$CUSTOM_MODULES_DIR" ]]; then
-  MODULE_COUNT=0
+# ---------------------------------------------------------------------------
+# Helper: analyze_module DIR MACHINE_NAME
+#
+# Reads the module's actual files and generates AI_CONTEXT.md with real info.
+# ---------------------------------------------------------------------------
+analyze_module() {
+  local module_dir="$1"
+  local machine_name="$2"
+  local info_yml="$module_dir/${machine_name}.info.yml"
 
-  for module_dir in "$CUSTOM_MODULES_DIR"/*/; do
-    # Skip if the glob didn't match anything (no subdirectories).
-    [[ -d "$module_dir" ]] || continue
+  # ── Extract info.yml metadata ──────────────────────────────────────────
+  local human_name="$machine_name"
+  local description=""
+  local module_type="Custom module"
+  local package=""
+  local dependencies=""
 
-    module_machine_name="$(basename "$module_dir")"
-    ai_context_file="$module_dir/AI_CONTEXT.md"
+  if [[ -f "$info_yml" ]]; then
+    human_name="$(grep -m1 '^name:' "$info_yml" 2>/dev/null \
+      | sed "s/^name:[[:space:]]*//" | sed "s/^['\"]//;s/['\"]$//" || true)"
+    [[ -z "$human_name" ]] && human_name="$machine_name"
 
-    if [[ -f "$ai_context_file" ]]; then
-      log_up_to_date "web/modules/custom/$module_machine_name/AI_CONTEXT.md"
-      UP_TO_DATE=$((UP_TO_DATE + 1))
-      MODULE_COUNT=$((MODULE_COUNT + 1))
-      continue
+    description="$(grep -m1 '^description:' "$info_yml" 2>/dev/null \
+      | sed "s/^description:[[:space:]]*//" | sed "s/^['\"]//;s/['\"]$//" || true)"
+
+    package="$(grep -m1 '^package:' "$info_yml" 2>/dev/null \
+      | sed "s/^package:[[:space:]]*//" | sed "s/^['\"]//;s/['\"]$//" || true)"
+
+    if grep -q '^dependencies:' "$info_yml" 2>/dev/null; then
+      dependencies="$(awk '/^dependencies:/{found=1; next} found && /^[[:space:]]+- /{print $2; next} found{exit}' \
+        "$info_yml" 2>/dev/null | tr '\n' ', ' | sed 's/, $//' || true)"
     fi
+  fi
 
-    # Try to extract the human-readable name from the .info.yml file.
-    info_yml="$module_dir/${module_machine_name}.info.yml"
-    module_human_name="$module_machine_name"
-    module_dependencies=""
+  # ── Scan for key files and structures ──────────────────────────────────
+  local key_files=""
+  local has_module_file=false
+  local has_routing=false
+  local has_services=false
+  local has_permissions=false
+  local has_libraries=false
+  local has_install=false
+  local has_config_install=false
+  local has_config_schema=false
+  local has_templates=false
+  local has_migrations=false
 
-    if [[ -f "$info_yml" ]]; then
-      # Extract "name:" value (first match).
-      yml_name="$(grep -m1 '^name:' "$info_yml" 2>/dev/null | sed "s/^name:[[:space:]]*//" | sed "s/^['\"]//;s/['\"]$//" || true)"
-      if [[ -n "$yml_name" ]]; then
-        module_human_name="$yml_name"
-      fi
+  [[ -f "$module_dir/${machine_name}.module" ]] && has_module_file=true
+  [[ -f "$module_dir/${machine_name}.routing.yml" ]] && has_routing=true
+  [[ -f "$module_dir/${machine_name}.services.yml" ]] && has_services=true
+  [[ -f "$module_dir/${machine_name}.permissions.yml" ]] && has_permissions=true
+  [[ -f "$module_dir/${machine_name}.libraries.yml" ]] && has_libraries=true
+  [[ -f "$module_dir/${machine_name}.install" ]] && has_install=true
+  [[ -d "$module_dir/config/install" ]] && has_config_install=true
+  [[ -d "$module_dir/config/schema" ]] && has_config_schema=true
+  [[ -d "$module_dir/templates" ]] && has_templates=true
+  [[ -d "$module_dir/migrations" || -d "$module_dir/config/install" ]] && \
+    ls "$module_dir"/config/install/migrate.migration.* 2>/dev/null | grep -q . && has_migrations=true
 
-      # Extract dependencies (lines under "dependencies:").
-      if grep -q '^dependencies:' "$info_yml" 2>/dev/null; then
-        module_dependencies="$(awk '/^dependencies:/{found=1; next} found && /^[[:space:]]+- /{print $2; next} found{exit}' "$info_yml" 2>/dev/null | tr '\n' ', ' | sed 's/, $//' || true)"
-      fi
+  # ── Extract hooks from .module ─────────────────────────────────────────
+  local hooks_list=""
+  if [[ "$has_module_file" == true ]]; then
+    hooks_list="$(grep -oP "^function ${machine_name}_\K[a-z_]+" \
+      "$module_dir/${machine_name}.module" 2>/dev/null | head -20 || true)"
+  fi
+
+  # ── Extract routes ─────────────────────────────────────────────────────
+  local routes_list=""
+  if [[ "$has_routing" == true ]]; then
+    routes_list="$(grep -E '^[a-zA-Z_][a-zA-Z0-9_.]*:' \
+      "$module_dir/${machine_name}.routing.yml" 2>/dev/null | sed 's/:$//' | head -15 || true)"
+  fi
+
+  # ── Extract services ───────────────────────────────────────────────────
+  local services_list=""
+  if [[ "$has_services" == true ]]; then
+    services_list="$(grep -E '^  [a-zA-Z_][a-zA-Z0-9_.]*:' \
+      "$module_dir/${machine_name}.services.yml" 2>/dev/null \
+      | sed 's/^  //;s/:$//' | head -15 || true)"
+  fi
+
+  # ── Discover src/ structure (plugins, forms, controllers, etc.) ────────
+  local src_summary=""
+  if [[ -d "$module_dir/src" ]]; then
+    local src_dirs
+    src_dirs="$(find "$module_dir/src" -type d -mindepth 1 | sort)"
+    if [[ -n "$src_dirs" ]]; then
+      src_summary=""
+      while IFS= read -r dir; do
+        local relative_dir="${dir#"$module_dir"/src/}"
+        local file_count
+        file_count="$(find "$dir" -maxdepth 1 -name '*.php' -type f 2>/dev/null | wc -l | tr -d ' ')"
+        if [[ "$file_count" -gt 0 ]]; then
+          src_summary="${src_summary}\n- \`src/${relative_dir}/\` — ${file_count} PHP file(s)"
+        fi
+      done <<< "$src_dirs"
     fi
+  fi
 
-    # Fill in dependencies placeholder.
-    if [[ -z "$module_dependencies" ]]; then
-      deps_text="{list from .info.yml if readable}"
-    else
-      deps_text="$module_dependencies"
-    fi
+  # ── Extract permissions ────────────────────────────────────────────────
+  local permissions_list=""
+  if [[ "$has_permissions" == true ]]; then
+    permissions_list="$(grep -E '^[a-z_][a-z_ ]*:' \
+      "$module_dir/${machine_name}.permissions.yml" 2>/dev/null \
+      | sed "s/['\"]//g;s/:$//" | head -10 || true)"
+  fi
 
-    if [[ "$DRY_RUN" == true ]]; then
-      log_installed "web/modules/custom/$module_machine_name/AI_CONTEXT.md (dry-run)"
-    else
-      cat > "$ai_context_file" <<AIEOF
-# ${module_human_name} — AI Context
+  # ── Build the AI_CONTEXT.md content ────────────────────────────────────
+  local content=""
+  content="# ${human_name} — AI Context"
+  content="${content}
 
-> Generated by drupal-agentic-workflow setup. Fill in the sections below.
+> Auto-generated by drupal-agentic-workflow setup from module analysis."
+
+  # Purpose section
+  if [[ -n "$description" ]]; then
+    content="${content}
 
 ## Purpose
-{Describe what this module does}
+${description}"
+  else
+    content="${content}
+
+## Purpose
+<!-- TODO: Describe what this module does -->"
+  fi
+
+  # Architecture section
+  content="${content}
 
 ## Architecture
-- **Type**: Custom module
-- **Dependencies**: ${deps_text}
+- **Machine name**: \`${machine_name}\`"
+  [[ -n "$package" ]] && content="${content}
+- **Package**: ${package}"
+  content="${content}
+- **Type**: ${module_type}"
+  if [[ -n "$dependencies" ]]; then
+    content="${content}
+- **Dependencies**: ${dependencies}"
+  else
+    content="${content}
+- **Dependencies**: None"
+  fi
+
+  # Key Files table
+  content="${content}
 
 ## Key Files
 | File | Purpose |
-|------|---------|
-| ${module_machine_name}.module | Hook implementations |
+|------|---------|"
 
-## Data Flow
-{Document the main data flow}
-AIEOF
-      log_installed "web/modules/custom/$module_machine_name/AI_CONTEXT.md"
+  [[ "$has_module_file" == true ]] && content="${content}
+| \`${machine_name}.module\` | Hook implementations |"
+  [[ "$has_routing" == true ]] && content="${content}
+| \`${machine_name}.routing.yml\` | Route definitions |"
+  [[ "$has_services" == true ]] && content="${content}
+| \`${machine_name}.services.yml\` | Service definitions |"
+  [[ "$has_permissions" == true ]] && content="${content}
+| \`${machine_name}.permissions.yml\` | Permission definitions |"
+  [[ "$has_libraries" == true ]] && content="${content}
+| \`${machine_name}.libraries.yml\` | CSS/JS library definitions |"
+  [[ "$has_install" == true ]] && content="${content}
+| \`${machine_name}.install\` | Install/update hooks |"
+  [[ "$has_config_install" == true ]] && content="${content}
+| \`config/install/\` | Default configuration |"
+  [[ "$has_config_schema" == true ]] && content="${content}
+| \`config/schema/\` | Configuration schema |"
+  [[ "$has_templates" == true ]] && content="${content}
+| \`templates/\` | Twig templates |"
+
+  # Source structure
+  if [[ -n "$src_summary" ]]; then
+    content="${content}
+
+## Source Structure"
+    content="${content}$(echo -e "$src_summary")"
+  fi
+
+  # Hooks
+  if [[ -n "$hooks_list" ]]; then
+    content="${content}
+
+## Hooks Implemented"
+    while IFS= read -r hook; do
+      content="${content}
+- \`hook_${hook}()\`"
+    done <<< "$hooks_list"
+  fi
+
+  # Routes
+  if [[ -n "$routes_list" ]]; then
+    content="${content}
+
+## Routes"
+    while IFS= read -r route; do
+      content="${content}
+- \`${route}\`"
+    done <<< "$routes_list"
+  fi
+
+  # Services
+  if [[ -n "$services_list" ]]; then
+    content="${content}
+
+## Services"
+    while IFS= read -r service; do
+      content="${content}
+- \`${service}\`"
+    done <<< "$services_list"
+  fi
+
+  # Permissions
+  if [[ -n "$permissions_list" ]]; then
+    content="${content}
+
+## Permissions"
+    while IFS= read -r perm; do
+      content="${content}
+- \`${perm}\`"
+    done <<< "$permissions_list"
+  fi
+
+  echo "$content"
+}
+
+if [[ "$SKIP_AI_CONTEXT" == true ]]; then
+  echo "  ${YELLOW}--skip-ai-context: skipping AI_CONTEXT.md generation${RESET}"
+elif [[ ! -d "$CUSTOM_MODULES_DIR" ]]; then
+  echo "  ${GRAY}Directory not found: web/modules/custom/ — skipping${RESET}"
+else
+  # Count modules and check which already have AI_CONTEXT.md.
+  MODULES_TOTAL=0
+  MODULES_MISSING_CONTEXT=0
+  for module_dir in "$CUSTOM_MODULES_DIR"/*/; do
+    [[ -d "$module_dir" ]] || continue
+    MODULES_TOTAL=$((MODULES_TOTAL + 1))
+    module_machine_name="$(basename "$module_dir")"
+    DISCOVERED_MODULES+=("$module_machine_name")
+    if [[ ! -f "$module_dir/AI_CONTEXT.md" ]]; then
+      MODULES_MISSING_CONTEXT=$((MODULES_MISSING_CONTEXT + 1))
     fi
-    INSTALLED=$((INSTALLED + 1))
-    MODULE_COUNT=$((MODULE_COUNT + 1))
   done
 
-  if [[ "$MODULE_COUNT" -eq 0 ]]; then
+  if [[ "$MODULES_TOTAL" -eq 0 ]]; then
     echo "  ${GRAY}No custom modules found in web/modules/custom/${RESET}"
+  elif [[ "$MODULES_MISSING_CONTEXT" -eq 0 ]]; then
+    echo "  All ${MODULES_TOTAL} module(s) already have AI_CONTEXT.md"
+    for module_dir in "$CUSTOM_MODULES_DIR"/*/; do
+      [[ -d "$module_dir" ]] || continue
+      module_machine_name="$(basename "$module_dir")"
+      log_up_to_date "web/modules/custom/$module_machine_name/AI_CONTEXT.md"
+      UP_TO_DATE=$((UP_TO_DATE + 1))
+    done
+  else
+    echo "  Found ${MODULES_TOTAL} custom module(s), ${MODULES_MISSING_CONTEXT} missing AI_CONTEXT.md"
+    echo ""
+
+    if [[ "$DRY_RUN" == true ]]; then
+      echo "  ${GRAY}(dry-run) Would prompt to generate AI_CONTEXT.md files${RESET}"
+      GENERATE_AI_CONTEXT=true
+    else
+      echo -n "  Generate AI_CONTEXT.md by analyzing module files? [Y/n] "
+      read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
+      if [[ "$REPLY" =~ ^[Yy]?$ ]]; then
+        GENERATE_AI_CONTEXT=true
+      else
+        GENERATE_AI_CONTEXT=false
+        echo "  ${GRAY}Skipped. You can generate these later by re-running setup.${RESET}"
+      fi
+    fi
+
+    if [[ "$GENERATE_AI_CONTEXT" == true ]]; then
+      for module_dir in "$CUSTOM_MODULES_DIR"/*/; do
+        [[ -d "$module_dir" ]] || continue
+        module_machine_name="$(basename "$module_dir")"
+        ai_context_file="$module_dir/AI_CONTEXT.md"
+
+        if [[ -f "$ai_context_file" ]]; then
+          log_up_to_date "web/modules/custom/$module_machine_name/AI_CONTEXT.md"
+          UP_TO_DATE=$((UP_TO_DATE + 1))
+          continue
+        fi
+
+        if [[ "$DRY_RUN" == true ]]; then
+          log_installed "web/modules/custom/$module_machine_name/AI_CONTEXT.md (dry-run)"
+        else
+          echo "  Analyzing $module_machine_name..."
+          ai_content="$(analyze_module "$module_dir" "$module_machine_name")"
+          echo "$ai_content" > "$ai_context_file"
+          log_installed "web/modules/custom/$module_machine_name/AI_CONTEXT.md"
+        fi
+        INSTALLED=$((INSTALLED + 1))
+      done
+    fi
   fi
-else
-  echo "  ${GRAY}Directory not found: web/modules/custom/ — skipping${RESET}"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 6 — Summary
+# Phase 6 — Update CLAUDE.md Custom Modules section with discovered modules
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 6: Updating CLAUDE.md Custom Modules listing${RESET}"
+
+if [[ ${#DISCOVERED_MODULES[@]} -gt 0 && -f "$TARGET_DIR/CLAUDE.md" ]]; then
+  # Build the module listing.
+  MODULE_LISTING=""
+  for mod in "${DISCOVERED_MODULES[@]}"; do
+    info_yml="$CUSTOM_MODULES_DIR/$mod/${mod}.info.yml"
+    mod_desc=""
+    if [[ -f "$info_yml" ]]; then
+      mod_desc="$(grep -m1 '^description:' "$info_yml" 2>/dev/null \
+        | sed "s/^description:[[:space:]]*//" | sed "s/^['\"]//;s/['\"]$//" || true)"
+    fi
+    if [[ -n "$mod_desc" ]]; then
+      MODULE_LISTING="${MODULE_LISTING}- **${mod}**: ${mod_desc} — [AI_CONTEXT.md](web/modules/custom/${mod}/AI_CONTEXT.md)
+"
+    else
+      MODULE_LISTING="${MODULE_LISTING}- **${mod}** — [AI_CONTEXT.md](web/modules/custom/${mod}/AI_CONTEXT.md)
+"
+    fi
+  done
+
+  # Check if the Custom Modules section has the placeholder comment.
+  if grep -qF '<!-- List your custom modules here.' "$TARGET_DIR/CLAUDE.md"; then
+    if [[ "$DRY_RUN" == true ]]; then
+      log_installed "CLAUDE.md (Custom Modules listing) (dry-run)"
+    else
+      # Replace the placeholder comment block with the actual module listing.
+      TEMP_FILE=$(mktemp)
+      awk -v listing="$MODULE_LISTING" '
+        /<!-- List your custom modules here\./ {
+          # Skip until closing -->
+          while ($0 !~ /-->/) { if ((getline) <= 0) break }
+          printf "%s", listing
+          next
+        }
+        { print }
+      ' "$TARGET_DIR/CLAUDE.md" > "$TEMP_FILE"
+      mv "$TEMP_FILE" "$TARGET_DIR/CLAUDE.md"
+      log_installed "CLAUDE.md (Custom Modules listing)"
+    fi
+    INSTALLED=$((INSTALLED + 1))
+  else
+    echo "  ${GRAY}Custom Modules section already customized — not overwriting${RESET}"
+  fi
+else
+  echo "  ${GRAY}No modules to list or CLAUDE.md not found — skipping${RESET}"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 7 — Summary
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
 echo "══════════════════════════════════════════════"
@@ -649,9 +931,9 @@ echo "  ${YELLOW}Skipped${RESET}   : ${SKIPPED} files (customized, not overwritt
 echo ""
 echo "  Next steps:"
 echo "  1. Review CLAUDE.md and fill in project details"
-echo "  2. List your custom modules in the \"Custom Modules\" section"
+echo "  2. Review the auto-populated \"Custom Modules\" section in CLAUDE.md"
 echo "  3. List installed contrib modules in the \"Contributed Modules\" section"
-echo "  4. Review AI_CONTEXT.md files in web/modules/custom/*/"
+echo "  4. Review generated AI_CONTEXT.md files and add any missing context"
 echo ""
 echo "══════════════════════════════════════════════"
 echo ""

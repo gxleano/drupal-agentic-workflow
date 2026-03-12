@@ -1,6 +1,6 @@
 # Drupal Agentic Workflow for Claude Code
 
-> Turn Claude Code into a Drupal-native development partner with 16 AI-powered skills, automated code quality hooks, and security scanning.
+> Turn Claude Code into a Drupal-native development partner with 20 AI-powered skills, automated code quality hooks, and security scanning.
 
 ## Why Use This?
 
@@ -9,7 +9,7 @@
 | Claude generates code with coding standard violations | phpcbf auto-fixes violations before you see them |
 | Manual phpcs/phpstan runs after every change | Post-generation hook lints every file automatically |
 | No protection against destructive commands | Pre-bash guard blocks `git reset --hard`, `rm -rf`, etc. |
-| Generic AI responses about Drupal | 16 specialized skills with Drupal 10/11 expertise |
+| Generic AI responses about Drupal | 20 specialized skills with Drupal 10/11 expertise |
 | Security issues caught in code review | Security patterns scanned on every file save |
 
 ### What Happens When You Write Code
@@ -64,10 +64,11 @@ This generates a `CLAUDE.md` with auto-detected project info.
 
 This single command:
 - Checks for code quality tools (`drupal/coder`, `phpstan`) and offers to install them
-- Copies all 16 skills and hooks into `.claude/`
+- Copies all 20 skills and hooks into `.claude/`
 - Appends Drupal coding rules to your existing `CLAUDE.md`
 - Installs `.prettierrc.json` and `phpstan.neon`
-- Generates `AI_CONTEXT.md` templates for custom modules missing one
+- Optionally analyzes custom modules and generates `AI_CONTEXT.md` with real module info (hooks, routes, services, etc.)
+- Auto-populates the Custom Modules section in `CLAUDE.md` with discovered modules
 
 The script is fully idempotent — safe to run multiple times. It never overwrites files you've customized.
 
@@ -76,14 +77,16 @@ Options:
 ~/drupal-agentic-workflow/bin/setup.sh --dry-run .       # Preview without changes
 ~/drupal-agentic-workflow/bin/setup.sh --force .         # Skip Drupal detection
 ~/drupal-agentic-workflow/bin/setup.sh --skip-tools .    # Skip code quality tools check
+~/drupal-agentic-workflow/bin/setup.sh --skip-ai-context . # Skip AI_CONTEXT.md generation prompt
 ~/drupal-agentic-workflow/bin/setup.sh --help            # Show help
 ```
 
 ### 4. Fill In Project Details
 
 In your `CLAUDE.md`, complete:
-- **Custom Modules** — list each module with `AI_CONTEXT.md` link
+- **Custom Modules** — auto-populated by setup if modules were found; review and adjust
 - **Contributed Modules** — list installed contrib
+- Review generated `AI_CONTEXT.md` files in `web/modules/custom/*/` and add any missing context
 - Any project-specific conventions
 
 ### 5. Verify Setup
@@ -99,7 +102,7 @@ claude
 
 ## What's Included
 
-### Skills (16)
+### Skills (20)
 
 | Skill | Type | Purpose |
 |-------|------|---------|
@@ -119,6 +122,10 @@ claude
 | **performance** | Inline | Caching, queries, BigPipe, profiling |
 | **drush** | Inline | Drush CLI reference, SQL, PHP eval, deprecated commands |
 | **refactor** | Inline | Code smell detection and refactoring guidance |
+| **doctor** | Inline | Diagnostic health check for workflow setup |
+| **accessibility** | Inline | WCAG 2.2 compliance, ARIA patterns, a11y testing |
+| **api** | Inline | REST, JSON:API, GraphQL for decoupled Drupal |
+| **entity** | Inline | Custom content/config entity types with bundles |
 
 ### Hooks
 
@@ -153,6 +160,10 @@ Once set up, use skills via slash commands in Claude Code:
 /config-management                     # Config management guidance
 /performance                           # Performance optimization
 /refactor                              # Code refactoring guidance
+/doctor                                # Verify workflow setup health
+/accessibility                         # WCAG 2.2 compliance guidance
+/api                                   # REST, JSON:API, GraphQL help
+/entity                                # Custom entity type guidance
 ```
 
 ## Manual Setup
@@ -187,9 +198,9 @@ ddev composer require --dev drupal/coder phpstan/phpstan mglaman/phpstan-drupal 
 
 In your `CLAUDE.md`, complete the Custom Modules and Contributed Modules sections.
 
-### 6. Create AI_CONTEXT.md for Each Module
+### 6. Review AI_CONTEXT.md Files
 
-For each custom module, create an `AI_CONTEXT.md` at the module root. Ask Claude: *"Create an AI_CONTEXT.md for {module_name}"*
+The setup script can automatically analyze your custom modules and generate `AI_CONTEXT.md` files with real information (hooks, routes, services, permissions, source structure). Review these and add any business logic context that static analysis can't capture. If you skipped this during setup, re-run the script or ask Claude: *"Create an AI_CONTEXT.md for {module_name}"*
 
 ### 7. Install Prettier (Optional)
 
@@ -339,7 +350,11 @@ your-drupal-project/
 │       ├── refactor/                  # Code smell detection and refactoring
 │       ├── scaffold/                  # Module/component generation
 │       ├── solr-setup/                # DDEV Solr configuration
-│       └── update-module/             # Safe contrib module updates
+│       ├── update-module/             # Safe contrib module updates
+│       ├── doctor/                    # Workflow setup health check
+│       ├── accessibility/             # WCAG 2.2 compliance
+│       ├── api/                       # REST, JSON:API, GraphQL
+│       └── entity/                    # Custom entity types
 ├── .prettierrc.json                   # Prettier config (JS/CSS/Twig/YAML/JSON)
 ├── phpstan.neon                       # PHPStan config (generated by setup)
 ├── CLAUDE.md                          # Generated per project (not from this repo)

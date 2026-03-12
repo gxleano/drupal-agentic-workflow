@@ -89,3 +89,7 @@ Use slash commands for detailed guidance instead of repeating knowledge here:
 | Safe contrib module updates | `/update-module` |
 | Drush CLI commands, SQL, deprecated commands | `/drush` |
 | Migration management | `/migrate` |
+| Workflow setup diagnostics | `/doctor` |
+| WCAG 2.2 compliance, ARIA, a11y testing | `/accessibility` |
+| REST, JSON:API, GraphQL development | `/api` |
+| Custom content/config entity types | `/entity` |
