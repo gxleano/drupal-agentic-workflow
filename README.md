@@ -1,6 +1,6 @@
 # Drupal Agentic Workflow for Claude Code
 
-> Turn Claude Code into a Drupal-native development partner with 20 AI-powered skills, automated code quality hooks, and security scanning.
+> Turn Claude Code into a Drupal-native development partner: specialized skills, auto-generated project context, code quality hooks, and security scanning.
 
 ## Why Use This?
 
@@ -9,8 +9,12 @@
 | Claude generates code with coding standard violations | phpcbf auto-fixes violations before you see them |
 | Manual phpcs/phpstan runs after every change | Post-generation hook lints every file automatically |
 | No protection against destructive commands | Pre-bash guard blocks `git reset --hard`, `rm -rf`, etc. |
-| Generic AI responses about Drupal | 20 specialized skills with Drupal 10/11 expertise |
+| Generic AI responses about Drupal | Specialized skills with Drupal 10/11 expertise |
 | Security issues caught in code review | Security patterns scanned on every file save |
+| Agent invents idioms instead of matching codebase | `.claude/conventions.md` reports actual adoption (hooks, DI, `match`/`switch`) |
+| Agent guesses content types / routes / services | `.claude/project-map.md` lists them from YAML config |
+| Agent re-litigates decisions you've already made | `.claude/decisions/` ADR scaffolds capture the *why* once |
+| Agent invents API URLs / credentials | `.claude/external-systems.md` documents where they live |
 
 ### What Happens When You Write Code
 
@@ -26,6 +30,36 @@ Claude writes/edits a file
       ├─ Is CSS/SCSS? → prettier → stylelint
       ├─ Is Twig/YAML/JSON? → prettier
       └─ Exit 2 if errors → Claude sees feedback and auto-corrects
+```
+
+### What Happens When You Run Setup
+
+```
+bin/setup.sh /path/to/project
+  │
+  ├─ Phase 0-6 : Validate Drupal project, install tools, copy skills/hooks,
+  │              merge CLAUDE.md, install .prettierrc, scan custom modules
+  │              for AI_CONTEXT.md
+  │
+  ├─ Phase 7   : detect.mjs        → .claude/stack.json + gaps.md
+  │              (PHP/Drupal/JS versions, integrations, capability gaps)
+  │
+  ├─ Phase 7b  : detect.mjs        → .claude/skills-recommended.md
+  │              (which installed skills cover which capability)
+  │
+  ├─ Phase 7c  : conventions.mjs   → .claude/conventions.md
+  │              (adoption stats for hook style, DI, match/switch, ...)
+  │
+  ├─ Phase 7d  : copies scaffolds  → .claude/glossary.md, external-systems.md,
+  │              test-fixtures.md, decisions/ (idempotent, user-owned)
+  │
+  ├─ Phase 7e  : project-map.mjs   → .claude/project-map.md
+  │              (content types, fields, roles, routes, services, splits)
+  │
+  ├─ Phase 8   : Summary (installed / up-to-date / skipped counts)
+  │
+  └─ Phase 9   : Offer to launch `claude` for the 4 manual next-step tasks;
+                 all prompts persisted to .claude/followups.md
 ```
 
 ## Prerequisites
@@ -64,30 +98,43 @@ This generates a `CLAUDE.md` with auto-detected project info.
 
 This single command:
 - Checks for code quality tools (`drupal/coder`, `phpstan`) and offers to install them
-- Copies all 20 skills and hooks into `.claude/`
-- Appends Drupal coding rules to your existing `CLAUDE.md`
+- Copies the bundled skills and hooks into `.claude/`
+- Appends Drupal coding rules to your existing `CLAUDE.md` (managed block — refreshed on re-run, your customizations outside the markers are preserved)
 - Installs `.prettierrc.json` and `phpstan.neon`
 - Optionally analyzes custom modules and generates `AI_CONTEXT.md` with real module info (hooks, routes, services, etc.)
 - Auto-populates the Custom Modules section in `CLAUDE.md` with discovered modules
+- **Generates the project-context files** that agents read: `stack.json`, `skills-recommended.md`, `conventions.md`, `project-map.md`, `gaps.md`
+- **Scaffolds knowledge files** the team fills in over time: `glossary.md`, `external-systems.md`, `test-fixtures.md`, `decisions/`
+- **Offers to launch `claude`** at the end for the 4 manual follow-up tasks (filling project details, contrib module list, etc.)
 
 The script is fully idempotent — safe to run multiple times. It never overwrites files you've customized.
 
 Options:
 ```
-~/drupal-agentic-workflow/bin/setup.sh --dry-run .       # Preview without changes
-~/drupal-agentic-workflow/bin/setup.sh --force .         # Skip Drupal detection
-~/drupal-agentic-workflow/bin/setup.sh --skip-tools .    # Skip code quality tools check
-~/drupal-agentic-workflow/bin/setup.sh --skip-ai-context . # Skip AI_CONTEXT.md generation prompt
-~/drupal-agentic-workflow/bin/setup.sh --help            # Show help
+~/drupal-agentic-workflow/bin/setup.sh --dry-run .          # Preview without changes
+~/drupal-agentic-workflow/bin/setup.sh --force .            # Skip Drupal detection
+~/drupal-agentic-workflow/bin/setup.sh --skip-tools .       # Skip code quality tools check
+~/drupal-agentic-workflow/bin/setup.sh --skip-ai-context .  # Skip AI_CONTEXT.md generation prompt
+~/drupal-agentic-workflow/bin/setup.sh --skip-detect .      # Skip stack detection / convention scan / project map
+~/drupal-agentic-workflow/bin/setup.sh --skip-followups .   # Skip the "open claude for X" prompts at the end
+~/drupal-agentic-workflow/bin/setup.sh --help               # Show help
 ```
 
 ### 4. Fill In Project Details
 
-In your `CLAUDE.md`, complete:
-- **Custom Modules** — auto-populated by setup if modules were found; review and adjust
-- **Contributed Modules** — list installed contrib
-- Review generated `AI_CONTEXT.md` files in `web/modules/custom/*/` and add any missing context
-- Any project-specific conventions
+Phase 9 of `setup.sh` automatically offers to launch `claude` for each of these tasks. If you skipped them (`--skip-followups`, ran in CI, or chose `N` at the prompt), the prompts are saved to `.claude/followups.md` — open the file and run `claude "<paste prompt>"` for any task whenever you're ready.
+
+The 4 follow-ups:
+- **Fill in CLAUDE.md project details** — agent uses `stack.json`, `project-map.md`, `conventions.md` to draft project overview and architecture notes.
+- **Verify Custom Modules descriptions** — agent cross-references each module's `AI_CONTEXT.md` and the project map to tighten the auto-populated descriptions.
+- **List installed contrib modules** — agent reads `composer.json`, groups packages by category, fills the Contributed Modules section.
+- **Review AI_CONTEXT.md per module** — agent appends a "Domain notes" section to each capturing business logic + gotchas (keeping the auto-generated tables intact).
+
+You can also hand-edit the team-owned knowledge files at any time:
+- `.claude/glossary.md` — domain terms
+- `.claude/external-systems.md` — API URLs, credential locations, integration notes
+- `.claude/test-fixtures.md` — demo users, sandbox cards, seed content
+- `.claude/decisions/NNNN-*.md` — architecture decision records (copy `0001-template.md`)
 
 ### 5. Verify Setup
 
@@ -140,6 +187,63 @@ claude
 - **Starter theme scaffold** — Ready-to-use theme template in `assets/theme-template/`
 - **CLAUDE-TEMPLATE.md** — Drupal coding standards appended to your project's CLAUDE.md
 - **phpstan.neon** — Generated with Drupal-specific configuration
+
+## Project Context Files
+
+The biggest gap between "Claude with skills" and "Claude that produces great code in *your* codebase" is **project context**. The skills know Drupal; the context files tell the agent what *this particular project* looks like.
+
+`setup.sh` generates the following inside your project's `.claude/` directory. Files marked **auto** are regenerated on each setup run from the current codebase state; files marked **scaffold** are templates you fill in (preserved across re-runs).
+
+| File | Type | Generated by | What it contains | When the agent reads it |
+|------|------|--------------|------------------|-------------------------|
+| `stack.json` | auto | `tools/detect.mjs` | PHP version, Drupal version, frontend stack, integrations, capability resolution against installed skills | Source of truth for tooling assumptions |
+| `gaps.md` | auto | `tools/detect.mjs` | Capability gaps (no installed skill covers them) + drift warnings (Node EOL, PHP/Drupal mismatch, missing phpunit.xml, etc.) | When planning new tooling / upgrades |
+| `skills-recommended.md` | auto | `tools/detect.mjs` | Capability → skill mapping table with descriptions pulled from each skill's frontmatter | When picking which skill to invoke for a task |
+| `conventions.md` | auto | `tools/conventions.mjs` | Adoption stats: `strict_types` %, hook style (`#[Hook]` vs `.module`), constructor promotion, `match`/`switch`, `\Drupal::` anti-patterns, plugin attribute vs annotation, SDC adoption, BEM ratio | Before writing PHP / JS / CSS — match what the codebase actually does |
+| `project-map.md` | auto | `tools/project-map.mjs` | Content types + fields, user roles, routes per custom module, services per custom module, config splits — all from YAML parsing (no Drush needed) | Before touching the data model, routes, or services |
+| `followups.md` | auto | `setup.sh` | The 4 next-step prompts in copy-paste form | When re-running a follow-up manually |
+| `glossary.md` | scaffold | template | Domain terms, German↔English vocabulary | Before naming things in code/UI/commits |
+| `external-systems.md` | scaffold | template | API URLs, credential locations, integration IDs | Before touching integrations |
+| `test-fixtures.md` | scaffold | template | Demo users, sandbox cards, seed content, reset recipes | Before verifying behavior locally |
+| `decisions/*.md` | scaffold | template | Architecture Decision Records (append-only) | Before proposing architectural alternatives already ruled out |
+
+The bundled `CLAUDE-TEMPLATE.md` includes a "Project knowledge files" table that points the agent at each of these — so they're actually discovered, not forgotten.
+
+### The Scanners
+
+| Tool | What it scans | Output |
+|------|---------------|--------|
+| `detect.mjs` | `composer.json/lock`, `package.json`, `*.info.yml`, `.ddev/`, CI config | `stack.json`, `gaps.md`, `skills-recommended.md` |
+| `conventions.mjs` | Every PHP/JS/CSS file under custom paths | `conventions.md` with adoption ratios + actionable guidance |
+| `project-map.mjs` | Drupal config (`config/sync/`, `config/default/`, ...) + custom-module `*.routing.yml` / `*.services.yml` | `project-map.md` |
+
+All three are zero-dep Node CLIs (Node 18+). They run cleanly without Drush, DDEV, or a running site — just static file analysis. Re-run any directly:
+
+```bash
+node .claude/tools/detect.mjs --gaps
+node .claude/tools/conventions.mjs --print
+node .claude/tools/project-map.mjs --print
+```
+
+### Skill `provides:` Field (Data-Driven Capability Matching)
+
+`detect.mjs` resolves capabilities → skills via two paths:
+
+1. **`provides:` frontmatter (authoritative)** — a skill declaring `provides: [drupal-backend, drupal-debug]` automatically satisfies those capabilities.
+2. **Name regex fallback** — for legacy skills without `provides:`, a built-in regex list still matches by name.
+
+To make a new skill discoverable for a capability, just add `provides:` to its `SKILL.md`:
+
+```markdown
+---
+name: my-helper
+description: ...
+version: 1.0.0
+provides: [drupal-backend, custom-capability]
+---
+```
+
+This means third-party / community skills can plug into the capability map without anyone editing the detector.
 
 ## Usage
 
@@ -325,41 +429,66 @@ ddev exec phpcbf --version
 
 ## File Structure
 
+### In `~/drupal-agentic-workflow/` (this repo — your install of the workflow)
+
+```
+~/drupal-agentic-workflow/
+├── bin/
+│   └── setup.sh                       # Idempotent installer (9 phases)
+├── CLAUDE-TEMPLATE.md                 # Managed-block content + skills index + knowledge files index
+├── README.md                          # This file
+├── .claude/
+│   ├── settings.json                  # Hook configuration (copied to projects)
+│   ├── hooks/                         # All shell hooks (copied to projects)
+│   └── skills/                        # Bundled skills (copied to projects)
+└── assets/
+    ├── tools/
+    │   ├── detect.mjs                 # Stack detection + skill capability resolver
+    │   ├── conventions.mjs            # Convention adoption scanner
+    │   └── project-map.mjs            # Content model / routes / services scanner
+    ├── knowledge/                     # Scaffolds (idempotent — never overwrites user content)
+    │   ├── glossary.md
+    │   ├── external-systems.md
+    │   ├── test-fixtures.md
+    │   └── decisions/
+    │       ├── README.md
+    │       └── 0001-template.md
+    ├── ci-templates/                  # CI/CD templates
+    └── theme-template/                # Starter theme scaffold
+```
+
+### In your Drupal project after `setup.sh`
+
 ```
 your-drupal-project/
 ├── .claude/
-│   ├── settings.json                  # Hook and skill configuration
-│   ├── hooks/
-│   │   ├── README.md                  # Hook documentation
-│   │   ├── pre-bash-guard.sh         # Blocks destructive Bash commands
-│   │   ├── post-generation-lint.sh    # phpcbf + phpcs + prettier + eslint + security scan
-│   │   └── prompt-context.sh          # Git status injection (opt-in)
-│   └── skills/
-│       ├── code-review/               # Architectural code reviews
-│       ├── config-management/         # Config export/import, Config Split, Recipes
-│       ├── ddev/                      # DDEV environment management
-│       ├── debug/                     # Code-level troubleshooting
-│       ├── drush/                     # Drush CLI reference + deprecated commands
-│       ├── drupal-expert/             # Drupal knowledge base + references
-│       ├── drupal-frontend-expert/    # Twig, SDC, theming + references
-│       ├── drupal-security/           # Proactive security + checklist
-│       ├── drupal-site-builder-expert/# Views, content types, config + references
-│       ├── generate-tests/            # PHPUnit test generation + references
-│       ├── migrate/                   # Migration management
-│       ├── performance/               # Caching, queries, BigPipe, profiling
-│       ├── refactor/                  # Code smell detection and refactoring
-│       ├── scaffold/                  # Module/component generation
-│       ├── solr-setup/                # DDEV Solr configuration
-│       ├── update-module/             # Safe contrib module updates
-│       ├── doctor/                    # Workflow setup health check
-│       ├── accessibility/             # WCAG 2.2 compliance
-│       ├── api/                       # REST, JSON:API, GraphQL
-│       └── entity/                    # Custom entity types
+│   ├── settings.json                  # Hook + skill configuration
+│   ├── hooks/                         # pre-bash-guard, post-generation-lint, etc.
+│   ├── skills/                        # Bundled skills
+│   ├── tools/                         # Copies of detect.mjs / conventions.mjs / project-map.mjs
+│   │
+│   ├── stack.json                     # AUTO — detected stack + capability resolution
+│   ├── gaps.md                        # AUTO — capability gaps + drift warnings
+│   ├── skills-recommended.md          # AUTO — capability → skill mapping
+│   ├── conventions.md                 # AUTO — code convention adoption stats
+│   ├── project-map.md                 # AUTO — content model, routes, services, roles, splits
+│   ├── followups.md                   # AUTO — the 4 next-step prompts in copy-paste form
+│   │
+│   ├── glossary.md                    # SCAFFOLD — domain glossary (team fills in)
+│   ├── external-systems.md            # SCAFFOLD — integrations & credential locations
+│   ├── test-fixtures.md               # SCAFFOLD — demo users / sandbox cards / seed content
+│   └── decisions/                     # SCAFFOLD — ADRs (append-only)
+│       ├── README.md
+│       └── 0001-template.md
+│
 ├── .prettierrc.json                   # Prettier config (JS/CSS/Twig/YAML/JSON)
-├── phpstan.neon                       # PHPStan config (generated by setup)
-├── CLAUDE.md                          # Generated per project (not from this repo)
-└── ...
+├── phpstan.neon                       # PHPStan config (generated)
+├── CLAUDE.md                          # Managed block + project sections
+└── web/modules/custom/<module>/
+    └── AI_CONTEXT.md                  # AUTO — per-module context (keys files, hooks, routes, services)
 ```
+
+The **AUTO** files refresh on each `setup.sh` run (so they reflect the current code). The **SCAFFOLD** files are templates — the script never overwrites your edits.
 
 ## Contributing
 
