@@ -65,31 +65,72 @@
 9. Missing `declare(strict_types=1)` on new PHP files
 10. Business logic in controllers/hooks instead of services
 
-<!-- Add project-specific lessons below. When Claude makes a mistake that gets corrected,
-     add it here so it won't repeat across sessions. Example:
-- Don't use X library for Y — use Z instead (learned 2025-03-01)
-- Our API returns paginated results — always handle pagination
--->
-
 ## Skills Reference
 
 Use slash commands for detailed guidance instead of repeating knowledge here:
 
+### Backend
 | Need | Skill |
 |------|-------|
 | Drupal development patterns, DI, testing | `/drupal-expert` |
-| Twig, SDC, theming, CSS/JS, a11y | `/drupal-frontend-expert` |
-| XSS, SQL injection, access control, CSRF | `/drupal-security` |
-| Views, content types, Layout Builder | `/drupal-site-builder-expert` |
-| Config export/import, Config Split, Recipes | `/config-management` |
-| Caching, queries, BigPipe, profiling | `/performance` |
+| Custom content/config entity types | `/entity` |
 | Generate modules, services, plugins, forms | `/scaffold` |
 | Troubleshoot hooks, services, cache, routes | `/debug` |
 | Code smells, god classes, anti-patterns | `/refactor` |
 | Safe contrib module updates | `/update-module` |
 | Drush CLI commands, SQL, deprecated commands | `/drush` |
 | Migration management | `/migrate` |
-| Workflow setup diagnostics | `/doctor` |
+
+### Frontend
+| Need | Skill |
+|------|-------|
+| Twig, SDC, theming, CSS/JS | `/drupal-frontend-expert` |
 | WCAG 2.2 compliance, ARIA, a11y testing | `/accessibility` |
 | REST, JSON:API, GraphQL development | `/api` |
-| Custom content/config entity types | `/entity` |
+
+### AI & Agentic
+| Need | Skill |
+|------|-------|
+| Drupal AI module, providers, FunctionCall plugins | `/drupal-ai` |
+| AI Search, vector DB, embeddings, RAG | `/drupal-ai-search` |
+| Custom Tool plugins, TypedDataAdapters | `/drupal-tool-api` |
+| FlowDrop workflows, orchestrators, state graph | `/flowdrop` |
+| FlowDrop visual agent editor | `/flowdrop-ui-agents` |
+
+### Site Building & Config
+| Need | Skill |
+|------|-------|
+| Views, content types, Layout Builder | `/drupal-site-builder-expert` |
+| Config export/import, Config Split, Recipes | `/config-management` |
+| Recipes with default content and translations | `/create-drupal-recipe` |
+| Caching, queries, BigPipe, profiling | `/performance` |
+| XSS, SQL injection, access control, CSRF | `/drupal-security` |
+
+### Workflow
+| Need | Skill |
+|------|-------|
+| Architectural code review | `/code-review` |
+| Generate PHPUnit tests | `/generate-tests` |
+| Estimate ticket complexity | `/estimate` |
+| Plan a feature, break into tasks | `/create-plan` |
+| DDEV environment management | `/ddev` |
+| Local Solr setup for DDEV | `/solr-setup` |
+| Workflow setup diagnostics | `/doctor` |
+
+## Project knowledge files
+
+Before generating code, **read the relevant files in `.claude/`** — they capture project-specific context that overrides generic Drupal conventions:
+
+| File | When to read it |
+|------|-----------------|
+| `.claude/conventions.md` | Before writing PHP/JS/CSS — adoption stats for hook style, DI, `match`/`switch`, etc. Match what the codebase actually does, not the textbook. |
+| `.claude/project-map.md` | Before touching the data model, routes, or services — structural overview of content types, fields, roles, routes per module, and services per module. |
+| `.claude/glossary.md` | Before naming things — domain terms (German/English) used in UI, code, and commits. |
+| `.claude/external-systems.md` | Before touching integrations — where API URLs, credentials, and IDs live (never invent endpoints). |
+| `.claude/test-fixtures.md` | Before verifying behavior locally — demo users, payment sandboxes, seed content. |
+| `.claude/decisions/*.md` | Before proposing architectural alternatives — append-only ADRs of decisions already made. |
+| `.claude/stack.json` | Detected stack snapshot (PHP/Drupal/frontend versions, integrations). Source of truth for tooling assumptions. |
+| `.claude/skills-recommended.md` | Capability → skill mapping for this project. Refer to it when picking which skill to invoke. |
+| `.claude/gaps.md` | Capabilities without an installed skill + drift warnings — useful when planning new tooling. |
+
+These files are scaffolded by `drupal-agentic-workflow` setup. Conventions/stack/gaps are auto-generated and refreshed on re-run; glossary/external-systems/test-fixtures/decisions are filled in by the team and preserved across re-runs.

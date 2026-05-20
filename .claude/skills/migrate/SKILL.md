@@ -2,6 +2,7 @@
 name: migrate
 description: Manage Drupal migrations (import, rollback, status, debug)
 version: 1.0.0
+provides: [migrations]
 ---
 
 You are a Drupal migration assistant. Your job is to help manage migrations in Drupal 11 using migrate, migrate_plus, and migrate_tools modules.

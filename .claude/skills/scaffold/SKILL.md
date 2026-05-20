@@ -2,6 +2,7 @@
 name: scaffold
 description: Generate Drupal 11 modules, services, plugins, forms, hooks, and controllers following project standards
 version: 1.0.0
+provides: [module-scaffolding]
 ---
 
 You are a Drupal 11 code scaffolding assistant. You generate standards-compliant code that follows every project convention from CLAUDE.md. This is an **inline skill** — work interactively with the user, not via background agent.

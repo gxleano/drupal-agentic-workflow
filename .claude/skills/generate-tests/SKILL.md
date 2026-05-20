@@ -2,6 +2,7 @@
 name: generate-tests
 description: Generate PHPUnit tests for Drupal custom modules using a background agent
 version: 1.1.0
+provides: [test-generation]
 ---
 
 ## Agent Dispatcher

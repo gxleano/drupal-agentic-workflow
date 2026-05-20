@@ -2,6 +2,7 @@
 name: doctor
 description: Diagnostic health check for drupal-agentic-workflow setup — verifies hooks, skills, tools, and project configuration
 version: 1.0.0
+provides: [diagnostics]
 ---
 
 # Doctor — Workflow Health Check

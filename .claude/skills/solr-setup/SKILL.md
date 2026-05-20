@@ -2,6 +2,7 @@
 name: solr-setup
 description: Setup and troubleshoot local Solr search for DDEV environment
 version: 1.0.0
+provides: [solr]
 ---
 
 You are a Solr search setup assistant for Drupal 11 on DDEV.

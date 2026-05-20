@@ -2,6 +2,7 @@
 name: ddev
 description: DDEV environment management, debugging, and troubleshooting for Drupal
 version: 1.0.0
+provides: [ddev]
 ---
 
 You are a DDEV and Drupal development environment assistant. You help with environment management, debugging, performance profiling, and troubleshooting.

@@ -8,6 +8,9 @@
 #   --dry-run     Show what would be done without making changes
 #   --skip-tools       Skip code quality tools detection/installation
 #   --skip-ai-context  Skip AI_CONTEXT.md generation prompt
+#   --skip-detect      Skip stack detection / skill gap analysis
+  --skip-followups   Skip the interactive "open claude for X" prompts at the end
+#   --skip-followups   Skip the interactive "open claude for X" prompts at the end
 #   --help             Show this help message
 #
 # Phases:
@@ -18,7 +21,13 @@
 #   4. Install .prettierrc.json (if missing)
 #   5. (Optional) Analyze web/modules/custom/ and generate AI_CONTEXT.md with real module info
 #   6. Update CLAUDE.md Custom Modules section with discovered modules
-#   7. Print summary with counts and next steps
+#   7. Detect stack (PHP/Drupal/frontend) and report skill capability gaps
+#   7b. Write .claude/skills-recommended.md mapping capabilities → skills
+#   7c. Scan custom code for convention adoption; write .claude/conventions.md
+#   7d. Scaffold knowledge files (ADRs, glossary, external systems, fixtures)
+#   7e. Build project-map.md from Drupal config + custom module YAMLs
+#   8. Print summary with counts and next steps
+#   9. Offer interactive `claude` follow-ups for CLAUDE.md / AI_CONTEXT polish
 #
 # Idempotency rules:
 #   - File exists and matches source → "up to date"
@@ -65,6 +74,8 @@ FORCE=false
 DRY_RUN=false
 SKIP_TOOLS=false
 SKIP_AI_CONTEXT=false
+SKIP_DETECT=false
+SKIP_FOLLOWUPS=false
 
 # ---------------------------------------------------------------------------
 # Usage
@@ -83,6 +94,8 @@ Options:
   --dry-run     Show what would be done without making changes
   --skip-tools       Skip code quality tools detection/installation
   --skip-ai-context  Skip AI_CONTEXT.md generation prompt
+  --skip-detect      Skip stack detection / skill gap analysis
+  --skip-followups   Skip the interactive "open claude for X" prompts at the end
   --help             Show this help message
 
 Phases:
@@ -93,7 +106,12 @@ Phases:
   4. Install .prettierrc.json (if missing)
   5. (Optional) Analyze custom modules and generate AI_CONTEXT.md files
   6. Update CLAUDE.md Custom Modules section with discovered modules
-  7. Print summary with counts and next steps
+  7. Detect stack and report skill capability gaps
+  7b. Write .claude/skills-recommended.md mapping capabilities → skills
+  7c. Scan custom code for convention adoption; write .claude/conventions.md
+  7d. Scaffold knowledge files (ADRs, glossary, external systems, fixtures)
+  7e. Build project-map.md (content types, roles, routes, services, splits)
+  8. Print summary with counts and next steps
 HELP
 }
 
@@ -116,6 +134,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-ai-context)
       SKIP_AI_CONTEXT=true
+      shift
+      ;;
+    --skip-detect)
+      SKIP_DETECT=true
+      shift
+      ;;
+    --skip-followups)
+      SKIP_FOLLOWUPS=true
       shift
       ;;
     --help|-h)
@@ -398,6 +424,10 @@ install_file_executable \
   "$TARGET_DIR/.claude/hooks/post-generation-lint.sh"
 
 install_file_executable \
+  "$TEMPLATE_DIR/.claude/hooks/post-session-phpstan.sh" \
+  "$TARGET_DIR/.claude/hooks/post-session-phpstan.sh"
+
+install_file_executable \
   "$TEMPLATE_DIR/.claude/hooks/prompt-context.sh" \
   "$TARGET_DIR/.claude/hooks/prompt-context.sh"
 
@@ -449,6 +479,17 @@ Located in `web/modules/custom/`. Each module has an `AI_CONTEXT.md` file — **
 - `web/sites/default/settings.local.php`
 - `.ddev/.env` or any secret values
 - `vendor/` directory
+
+## Project Lessons
+
+<!-- This section is yours — it lives outside the managed block and is never overwritten by setup.sh updates.
+     When Claude makes a mistake you correct, add it here so it won't repeat across sessions.
+
+     Format: - <rule> (learned YYYY-MM-DD)
+     Examples:
+     - Don't use X library for Y — use Z instead (learned 2025-03-01)
+     - Our API returns paginated results — always handle the _links.next cursor (learned 2025-03-15)
+-->
 SCAFFOLD
 )
 
@@ -894,16 +935,19 @@ if [[ ${#DISCOVERED_MODULES[@]} -gt 0 && -f "$TARGET_DIR/CLAUDE.md" ]]; then
     else
       # Replace the placeholder comment block with the actual module listing.
       TEMP_FILE=$(mktemp)
-      awk -v listing="$MODULE_LISTING" '
+      LISTING_FILE=$(mktemp)
+      printf '%s' "$MODULE_LISTING" > "$LISTING_FILE"
+      awk -v listing_file="$LISTING_FILE" '
         /<!-- List your custom modules here\./ {
-          # Skip until closing -->
           while ($0 !~ /-->/) { if ((getline) <= 0) break }
-          printf "%s", listing
+          while ((getline line < listing_file) > 0) print line
+          close(listing_file)
           next
         }
         { print }
       ' "$TARGET_DIR/CLAUDE.md" > "$TEMP_FILE"
       mv "$TEMP_FILE" "$TARGET_DIR/CLAUDE.md"
+      rm -f "$LISTING_FILE"
       log_installed "CLAUDE.md (Custom Modules listing)"
     fi
     INSTALLED=$((INSTALLED + 1))
@@ -915,7 +959,284 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 7 — Summary
+# Phase 7 — Stack detection and skill capability gap analysis
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 7: Stack detection${RESET}"
+
+DETECT_SRC="$TEMPLATE_DIR/assets/tools/detect.mjs"
+DETECT_DEST="$TARGET_DIR/.claude/tools/detect.mjs"
+
+if [[ "$SKIP_DETECT" == true ]]; then
+  echo "  ${YELLOW}--skip-detect: skipping stack detection${RESET}"
+elif [[ ! -f "$DETECT_SRC" ]]; then
+  echo "  ${YELLOW}⚠ detect.mjs not found in template (${DETECT_SRC#"$TEMPLATE_DIR"/})${RESET}"
+elif ! command -v node &>/dev/null; then
+  install_file "$DETECT_SRC" "$DETECT_DEST"
+  echo "  ${YELLOW}⚠ node not found — install Node 18+ then run: node .claude/tools/detect.mjs${RESET}"
+else
+  install_file "$DETECT_SRC" "$DETECT_DEST"
+
+  if [[ "$DRY_RUN" == true ]]; then
+    echo "  ${GRAY}(dry-run) Would run: node .claude/tools/detect.mjs --gaps${RESET}"
+  else
+    echo "  Running detect.mjs..."
+    if (cd "$TARGET_DIR" && node .claude/tools/detect.mjs --gaps >/dev/null 2>&1); then
+      STACK_JSON="$TARGET_DIR/.claude/stack.json"
+
+      if command -v jq &>/dev/null && [[ -f "$STACK_JSON" ]]; then
+        echo ""
+        echo "  ${BOLD}Detected stack:${RESET}"
+        jq -r '
+          "    Backend     : " + (.backend.framework // "n/a") + " " + (.backend.drupal_core // "") + " / PHP " + (.backend.php_version // "n/a"),
+          "    Frontend    : " + ((.frontend.languages // []) | join("+")) + " via " + (.frontend.build // "n/a") + " (node " + (.frontend.node // "n/a") + ")",
+          "    Modules     : " + ((.backend.custom_modules_count // 0) | tostring) + " custom",
+          "    Integrations: " + (((.backend.integrations // []) | join(", ")) // "none")
+        ' "$STACK_JSON"
+
+        OK_COUNT=$(jq -r '[.skills.capabilities[] | select(.status == "available")] | length' "$STACK_JSON")
+        GAP_COUNT=$(jq -r '.skills.gaps | length' "$STACK_JSON")
+        echo ""
+        echo "  ${BOLD}Skill capabilities:${RESET}"
+        echo "    ${GREEN}✓ satisfied${RESET}: $OK_COUNT"
+        echo "    ${YELLOW}⚠ gaps${RESET}     : $GAP_COUNT"
+
+        if [[ "$GAP_COUNT" -gt 0 ]]; then
+          echo ""
+          echo "  Capabilities without an available skill:"
+          jq -r '.skills.gaps[] | "    - \(.capability) [\(.status)]"' "$STACK_JSON"
+        fi
+
+        DRIFT_COUNT=$(jq -r '.drift | length' "$STACK_JSON")
+        if [[ "$DRIFT_COUNT" -gt 0 ]]; then
+          echo ""
+          echo "  ${YELLOW}Drift warnings:${RESET}"
+          jq -r '.drift[] | "    ⚠ \(.)"' "$STACK_JSON"
+        fi
+
+        echo ""
+        echo "  Full report : .claude/stack.json"
+        echo "  Gap summary : .claude/gaps.md"
+      else
+        echo "  ${GREEN}✓ Wrote .claude/stack.json and .claude/gaps.md${RESET}"
+        echo "  ${GRAY}(install jq for a formatted summary)${RESET}"
+      fi
+    else
+      echo "  ${YELLOW}⚠ Stack detection failed — run manually: node .claude/tools/detect.mjs --print${RESET}" >&2
+    fi
+  fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 7b — Write recommended-skills doc from detector output
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 7b: Recommended skills${RESET}"
+
+RECO_FILE="$TARGET_DIR/.claude/skills-recommended.md"
+STACK_JSON="$TARGET_DIR/.claude/stack.json"
+
+if [[ "$SKIP_DETECT" == true ]]; then
+  echo "  ${YELLOW}--skip-detect: skipping recommended-skills doc${RESET}"
+elif [[ ! -f "$STACK_JSON" ]]; then
+  echo "  ${GRAY}No stack.json found (detection skipped or failed) — skipping${RESET}"
+elif ! command -v jq &>/dev/null; then
+  echo "  ${YELLOW}⚠ jq required to build recommended-skills doc — skipping${RESET}"
+else
+  # Build the recommended-skills markdown into a temp file.
+  RECO_TMP=$(mktemp)
+  {
+    PROJECT_NAME=$(jq -r '.project.name // "project"' "$STACK_JSON")
+    echo "# Recommended skills for ${PROJECT_NAME}"
+    echo ""
+    echo "> Generated by drupal-agentic-workflow setup."
+    echo "> Source of truth: \`.claude/stack.json\` (check mtime for freshness)."
+    echo "> Re-run \`setup.sh\` to refresh."
+    echo ""
+    echo "## Detected stack"
+    echo ""
+    jq -r '
+      "- **Backend**: " + (.backend.framework // "n/a") + " " + (.backend.drupal_core // "") + " on PHP " + (.backend.php_version // "n/a"),
+      "- **Frontend**: " + ((.frontend.languages // []) | join(", ")) + " via " + (.frontend.build // "n/a") + " (node " + (.frontend.node // "n/a") + ")",
+      "- **Custom modules**: " + ((.backend.custom_modules_count // 0) | tostring),
+      "- **Integrations**: " + (if ((.backend.integrations // []) | length) > 0 then ((.backend.integrations // []) | join(", ")) else "none" end)
+    ' "$STACK_JSON"
+    echo ""
+    echo "## Use these skills for this project"
+    echo ""
+    echo "| Capability | Skill | When to invoke |"
+    echo "|------------|-------|----------------|"
+    jq -r '
+      .skills.capabilities[]
+      | select(.status == "available")
+      | . as $cap
+      | .satisfied_by[]
+      | "| `\($cap.capability)` | `\(.name)` | " + (if (.description // "") != "" then .description else "when working on \($cap.capability) concerns" end) + " |"
+    ' "$STACK_JSON"
+    echo ""
+    GAP_COUNT=$(jq -r '.skills.gaps | length' "$STACK_JSON")
+    if [[ "$GAP_COUNT" -gt 0 ]]; then
+      echo "## Capability gaps (no canonical skill yet)"
+      echo ""
+      jq -r '.skills.gaps[] | "- **\(.capability)** — \(.status)"' "$STACK_JSON"
+      echo ""
+      echo "These are project-specific needs without an installed skill. Consider scaffolding one under \`.claude/skills/\` if the gap is recurring."
+      echo ""
+    fi
+    DRIFT_COUNT=$(jq -r '.drift | length' "$STACK_JSON")
+    if [[ "$DRIFT_COUNT" -gt 0 ]]; then
+      echo "## Drift warnings"
+      echo ""
+      jq -r '.drift[] | "- \(.)"' "$STACK_JSON"
+      echo ""
+    fi
+  } > "$RECO_TMP"
+
+  # Apply standard idempotency rules.
+  if [[ -f "$RECO_FILE" ]]; then
+    if diff -q "$RECO_TMP" "$RECO_FILE" &>/dev/null; then
+      log_up_to_date ".claude/skills-recommended.md"
+      UP_TO_DATE=$((UP_TO_DATE + 1))
+      rm -f "$RECO_TMP"
+    else
+      if [[ "$DRY_RUN" == true ]]; then
+        log_skipped ".claude/skills-recommended.md"
+        SKIPPED=$((SKIPPED + 1))
+        rm -f "$RECO_TMP"
+      else
+        echo -n "  Existing .claude/skills-recommended.md differs. Overwrite? [y/N] "
+        read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+          mv "$RECO_TMP" "$RECO_FILE"
+          log_installed ".claude/skills-recommended.md (refreshed)"
+          INSTALLED=$((INSTALLED + 1))
+        else
+          log_skipped ".claude/skills-recommended.md"
+          SKIPPED=$((SKIPPED + 1))
+          rm -f "$RECO_TMP"
+        fi
+      fi
+    fi
+  else
+    if [[ "$DRY_RUN" == true ]]; then
+      log_installed ".claude/skills-recommended.md (dry-run)"
+      rm -f "$RECO_TMP"
+    else
+      mv "$RECO_TMP" "$RECO_FILE"
+      log_installed ".claude/skills-recommended.md"
+    fi
+    INSTALLED=$((INSTALLED + 1))
+  fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 7c — Convention scan (mine existing code for adopted idioms)
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 7c: Convention scan${RESET}"
+
+CONV_SRC="$TEMPLATE_DIR/assets/tools/conventions.mjs"
+CONV_DEST="$TARGET_DIR/.claude/tools/conventions.mjs"
+
+if [[ "$SKIP_DETECT" == true ]]; then
+  echo "  ${YELLOW}--skip-detect: skipping convention scan${RESET}"
+elif [[ ! -f "$CONV_SRC" ]]; then
+  echo "  ${YELLOW}⚠ conventions.mjs not found in template${RESET}"
+elif ! command -v node &>/dev/null; then
+  install_file "$CONV_SRC" "$CONV_DEST"
+  echo "  ${YELLOW}⚠ node not found — install Node 18+ then run: node .claude/tools/conventions.mjs${RESET}"
+else
+  install_file "$CONV_SRC" "$CONV_DEST"
+
+  if [[ "$DRY_RUN" == true ]]; then
+    echo "  ${GRAY}(dry-run) Would run: node .claude/tools/conventions.mjs${RESET}"
+  else
+    echo "  Scanning custom code..."
+    if (cd "$TARGET_DIR" && node .claude/tools/conventions.mjs 2>&1 | sed 's/^/    /'); then
+      CONV_FILE="$TARGET_DIR/.claude/conventions.md"
+      if [[ -f "$CONV_FILE" ]]; then
+        # Show the guidance section inline so the user sees actionable output.
+        echo ""
+        echo "  ${BOLD}Top guidance (excerpt):${RESET}"
+        sed -n '/^## Guidance for code generation/,$p' "$CONV_FILE" \
+          | tail -n +2 | head -8 | sed 's/^/    /'
+        echo ""
+        echo "  Full report: .claude/conventions.md"
+      fi
+    else
+      echo "  ${YELLOW}⚠ Convention scan failed${RESET}" >&2
+    fi
+  fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 7d — Knowledge scaffolds (ADRs, glossary, external systems, fixtures)
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 7d: Knowledge scaffolds${RESET}"
+
+KNOWLEDGE_SRC="$TEMPLATE_DIR/assets/knowledge"
+
+if [[ ! -d "$KNOWLEDGE_SRC" ]]; then
+  echo "  ${YELLOW}⚠ Knowledge templates not found in ${KNOWLEDGE_SRC#"$TEMPLATE_DIR"/}${RESET}"
+else
+  install_file \
+    "$KNOWLEDGE_SRC/glossary.md" \
+    "$TARGET_DIR/.claude/glossary.md"
+
+  install_file \
+    "$KNOWLEDGE_SRC/external-systems.md" \
+    "$TARGET_DIR/.claude/external-systems.md"
+
+  install_file \
+    "$KNOWLEDGE_SRC/test-fixtures.md" \
+    "$TARGET_DIR/.claude/test-fixtures.md"
+
+  install_file \
+    "$KNOWLEDGE_SRC/decisions/README.md" \
+    "$TARGET_DIR/.claude/decisions/README.md"
+
+  install_file \
+    "$KNOWLEDGE_SRC/decisions/0001-template.md" \
+    "$TARGET_DIR/.claude/decisions/0001-template.md"
+
+  echo "  ${GRAY}These files are scaffolds — fill them in as the project grows.${RESET}"
+  echo "  ${GRAY}They are read by the coding agent when relevant.${RESET}"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 7e — Project map (content model, routes, services, roles, splits)
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 7e: Project map${RESET}"
+
+MAP_SRC="$TEMPLATE_DIR/assets/tools/project-map.mjs"
+MAP_DEST="$TARGET_DIR/.claude/tools/project-map.mjs"
+
+if [[ "$SKIP_DETECT" == true ]]; then
+  echo "  ${YELLOW}--skip-detect: skipping project map${RESET}"
+elif [[ ! -f "$MAP_SRC" ]]; then
+  echo "  ${YELLOW}⚠ project-map.mjs not found in template${RESET}"
+elif ! command -v node &>/dev/null; then
+  install_file "$MAP_SRC" "$MAP_DEST"
+  echo "  ${YELLOW}⚠ node not found — install Node 18+ then run: node .claude/tools/project-map.mjs${RESET}"
+else
+  install_file "$MAP_SRC" "$MAP_DEST"
+
+  if [[ "$DRY_RUN" == true ]]; then
+    echo "  ${GRAY}(dry-run) Would run: node .claude/tools/project-map.mjs${RESET}"
+  else
+    echo "  Scanning Drupal config + custom module YAMLs..."
+    if (cd "$TARGET_DIR" && node .claude/tools/project-map.mjs 2>&1 | sed 's/^/    /'); then
+      echo "  Full report: .claude/project-map.md"
+    else
+      echo "  ${YELLOW}⚠ Project map scan failed${RESET}" >&2
+    fi
+  fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 8 — Summary
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
 echo "══════════════════════════════════════════════"
@@ -929,11 +1250,94 @@ echo "  ${GREEN}Installed${RESET} : ${INSTALLED} files"
 echo "  ${GRAY}Up to date${RESET}: ${UP_TO_DATE} files"
 echo "  ${YELLOW}Skipped${RESET}   : ${SKIPPED} files (customized, not overwritten)"
 echo ""
-echo "  Next steps:"
-echo "  1. Review CLAUDE.md and fill in project details"
-echo "  2. Review the auto-populated \"Custom Modules\" section in CLAUDE.md"
-echo "  3. List installed contrib modules in the \"Contributed Modules\" section"
-echo "  4. Review generated AI_CONTEXT.md files and add any missing context"
+echo "══════════════════════════════════════════════"
+echo ""
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 9 — Interactive follow-ups (optionally launch claude per task)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Prompts the agent should run. Kept as parallel arrays so they're easy to maintain.
+FOLLOWUP_LABELS=(
+  "Fill in CLAUDE.md project details"
+  "Verify the auto-populated 'Custom Modules' descriptions in CLAUDE.md"
+  "Populate the 'Installed Contributed Modules/Themes' section in CLAUDE.md"
+  "Review per-module AI_CONTEXT.md files"
+)
+FOLLOWUP_PROMPTS=(
+  "Review CLAUDE.md in this project and fill in any TODO or placeholder sections (project overview, architecture description, environment notes). Use .claude/stack.json, .claude/project-map.md, and .claude/conventions.md as ground truth. Do not modify the managed block between the drupal-agentic-workflow:start and drupal-agentic-workflow:end markers — only edit content outside of it."
+  "Review the 'Custom Modules' section in CLAUDE.md. For each listed module, verify the one-line description matches what the module actually does. Cross-reference with .claude/project-map.md (services, routes per module) and each module's AI_CONTEXT.md if present. Update descriptions where they are missing, vague, or misleading."
+  "Populate the 'Installed Contributed Modules/Themes' section in CLAUDE.md from composer.json. For each drupal/* dependency (excluding core and core-* packages), list the package name with version constraint and a one-line summary of its purpose. Group by category if there are many (admin, content, search, performance, etc.). Skip drupal/core, drupal/core-*, and dev-only packages."
+  "For each web/modules/custom/*/AI_CONTEXT.md file, review the auto-generated content against the actual module code. The 'Key Files', 'Hooks', 'Routes', and 'Services' tables were extracted automatically — keep them intact. Append a 'Domain notes' section to each where you can capture: business logic the agent should know, integration touchpoints, gotchas, and any non-obvious behavior."
+)
+
+# Always write the prompts to a file the user can rerun manually later.
+# (Skip the actual write on dry-run since .claude/ may not exist yet.)
+FOLLOWUPS_FILE="$TARGET_DIR/.claude/followups.md"
+if [[ "$DRY_RUN" != true ]]; then
+  mkdir -p "$TARGET_DIR/.claude"
+fi
+[[ "$DRY_RUN" == true ]] && FOLLOWUPS_FILE="/dev/null"
+{
+  echo "# Follow-up prompts for claude"
+  echo ""
+  echo "> Generated by drupal-agentic-workflow setup. These are the recommended"
+  echo "> next-step prompts to refine your project's agent context. Run them with"
+  echo "> \`claude \"<prompt>\"\` from the project root, or re-run setup.sh to be"
+  echo "> offered interactively again."
+  echo ""
+  for i in "${!FOLLOWUP_LABELS[@]}"; do
+    n=$((i + 1))
+    echo "## $n. ${FOLLOWUP_LABELS[$i]}"
+    echo ""
+    echo '```'
+    echo "${FOLLOWUP_PROMPTS[$i]}"
+    echo '```'
+    echo ""
+  done
+} > "$FOLLOWUPS_FILE"
+
+if [[ "$SKIP_FOLLOWUPS" == true ]]; then
+  echo "  ${YELLOW}--skip-followups: not offering interactive next steps${RESET}"
+  echo "  Prompts saved to .claude/followups.md — run them manually with \`claude \"<prompt>\"\`."
+elif [[ "$DRY_RUN" == true ]]; then
+  echo "  ${GRAY}(dry-run) Would offer 4 follow-up prompts via claude CLI${RESET}"
+  echo "  Prompts saved to .claude/followups.md"
+elif ! command -v claude &>/dev/null; then
+  echo "  ${GRAY}claude CLI not found on PATH — skipping interactive follow-ups${RESET}"
+  echo "  Prompts saved to .claude/followups.md — run them when claude is installed."
+elif [[ ! -t 0 ]]; then
+  echo "  ${GRAY}Non-interactive shell — skipping follow-ups${RESET}"
+  echo "  Prompts saved to .claude/followups.md"
+else
+  echo "  ${BOLD}Optional follow-ups${RESET} — refine the project's agent context."
+  echo "  For each task, you can launch claude with a prepared prompt."
+  echo "  All prompts are saved to .claude/followups.md for later use."
+  echo ""
+
+  for i in "${!FOLLOWUP_LABELS[@]}"; do
+    n=$((i + 1))
+    echo "  ${BOLD}$n. ${FOLLOWUP_LABELS[$i]}${RESET}"
+    echo -n "     Launch claude for this? [y/N/q to quit] "
+    read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
+    case "$REPLY" in
+      [Yy]*)
+        echo "  ${GRAY}Launching claude in $TARGET_DIR...${RESET}"
+        (cd "$TARGET_DIR" && claude "${FOLLOWUP_PROMPTS[$i]}") || \
+          echo "  ${YELLOW}⚠ claude exited non-zero${RESET}"
+        ;;
+      [Qq]*)
+        echo "  ${GRAY}Quitting follow-ups (remaining prompts are in .claude/followups.md)${RESET}"
+        break
+        ;;
+      *)
+        echo "  ${GRAY}Skipped.${RESET}"
+        ;;
+    esac
+    echo ""
+  done
+fi
+
 echo ""
 echo "══════════════════════════════════════════════"
 echo ""
