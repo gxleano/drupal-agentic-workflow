@@ -254,6 +254,33 @@ install_file_executable() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# Helper: examples_branch_for_major MAJOR
+#
+# Returns the branch name of the Drupal Examples module that corresponds to
+# the given Drupal core major version. Echoes empty string for unmapped
+# majors — callers should `warn` and skip when that happens.
+#
+# MAINTAINER NOTE: When a new Drupal major ships, check the Examples project
+# page at https://www.drupal.org/project/examples for the supported branch
+# and add a new case below.
+# ---------------------------------------------------------------------------
+examples_branch_for_major() {
+  local major="$1"
+  case "$major" in
+    10) echo "4.0.x" ;;
+    11) echo "4.0.x" ;;
+    *)  echo "" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Helper: warn — write a yellow warning to stderr.
+# ---------------------------------------------------------------------------
+warn() {
+  echo "  ${YELLOW}⚠${RESET} $*" >&2
+}
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase 0 — Validate target is a Drupal project
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1023,6 +1050,127 @@ else
       fi
     else
       echo "  ${YELLOW}⚠ Stack detection failed — run manually: node .claude/tools/detect.mjs --print${RESET}" >&2
+    fi
+  fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 7g — Vendor the Drupal Examples module into .claude/reference/examples
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 7g: Reference: Drupal Examples module${RESET}"
+
+EXAMPLES_DIR="$TARGET_DIR/.claude/reference/examples"
+EXAMPLES_MARKER="$EXAMPLES_DIR/.fetched-for"
+REFERENCE_README="$TARGET_DIR/.claude/reference/README.md"
+STACK_JSON="$TARGET_DIR/.claude/stack.json"
+
+if ! command -v git &>/dev/null; then
+  warn "git not found on PATH — skipping examples vendor (non-fatal)"
+elif [[ ! -f "$STACK_JSON" ]]; then
+  echo "  ${GRAY}No stack.json found (detection skipped or failed) — skipping${RESET}"
+else
+  # Read backend.drupal_core; prefer jq, fall back to grep/sed.
+  DRUPAL_CORE=""
+  if command -v jq &>/dev/null; then
+    DRUPAL_CORE="$(jq -r '.backend.drupal_core // ""' "$STACK_JSON" 2>/dev/null || echo "")"
+  else
+    DRUPAL_CORE="$(grep -o '"drupal_core"[[:space:]]*:[[:space:]]*"[^"]*"' "$STACK_JSON" 2>/dev/null \
+      | head -1 | sed 's/.*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "")"
+  fi
+
+  # Extract the major version (e.g., "11.1.2" → "11", "10" → "10").
+  DRUPAL_MAJOR="${DRUPAL_CORE%%.*}"
+
+  if [[ -z "$DRUPAL_MAJOR" ]]; then
+    warn "Could not determine Drupal major from stack.json — skipping examples vendor"
+  else
+    EXAMPLES_BRANCH="$(examples_branch_for_major "$DRUPAL_MAJOR")"
+    if [[ -z "$EXAMPLES_BRANCH" ]]; then
+      warn "No Examples branch mapping for Drupal $DRUPAL_MAJOR — update examples_branch_for_major() in bin/setup.sh"
+    else
+      # Determine current fetched-for state.
+      FETCHED_MAJOR=""
+      if [[ -f "$EXAMPLES_MARKER" ]]; then
+        FETCHED_MAJOR="$(grep -o '"drupal_major"[[:space:]]*:[[:space:]]*"[^"]*"' "$EXAMPLES_MARKER" 2>/dev/null \
+          | head -1 | sed 's/.*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "")"
+      fi
+
+      NEEDS_CLONE=false
+      if [[ ! -d "$EXAMPLES_DIR" ]]; then
+        NEEDS_CLONE=true
+      elif [[ "$FORCE" == true ]]; then
+        NEEDS_CLONE=true
+      elif [[ -z "$FETCHED_MAJOR" || "$FETCHED_MAJOR" != "$DRUPAL_MAJOR" ]]; then
+        NEEDS_CLONE=true
+      fi
+
+      if [[ "$NEEDS_CLONE" == true ]]; then
+        if [[ "$DRY_RUN" == true ]]; then
+          log_installed ".claude/reference/examples (branch $EXAMPLES_BRANCH for Drupal $DRUPAL_MAJOR) (dry-run)"
+          INSTALLED=$((INSTALLED + 1))
+        else
+          # Wipe any stale checkout (different major / partial clone).
+          if [[ -d "$EXAMPLES_DIR" ]]; then
+            rm -rf "$EXAMPLES_DIR"
+          fi
+          mkdir -p "$(dirname "$EXAMPLES_DIR")"
+          echo "  Cloning Drupal Examples module (branch $EXAMPLES_BRANCH for Drupal $DRUPAL_MAJOR)..."
+          if git clone --depth=1 --branch="$EXAMPLES_BRANCH" \
+              https://git.drupalcode.org/project/examples.git "$EXAMPLES_DIR" 2>&1 | sed 's/^/    /'; then
+            FETCH_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            cat > "$EXAMPLES_MARKER" <<MARKER
+{
+  "drupal_major": "$DRUPAL_MAJOR",
+  "branch": "$EXAMPLES_BRANCH",
+  "fetch_date": "$FETCH_DATE"
+}
+MARKER
+            log_installed ".claude/reference/examples (branch $EXAMPLES_BRANCH for Drupal $DRUPAL_MAJOR)"
+            INSTALLED=$((INSTALLED + 1))
+          else
+            warn "git clone of Drupal Examples module failed — skipping"
+          fi
+        fi
+      else
+        log_up_to_date ".claude/reference/examples (Drupal $DRUPAL_MAJOR, branch $EXAMPLES_BRANCH)"
+        UP_TO_DATE=$((UP_TO_DATE + 1))
+      fi
+
+      # Install reference README once (idempotent).
+      if [[ -f "$REFERENCE_README" ]]; then
+        log_up_to_date ".claude/reference/README.md"
+        UP_TO_DATE=$((UP_TO_DATE + 1))
+      else
+        if [[ "$DRY_RUN" == true ]]; then
+          log_installed ".claude/reference/README.md (dry-run)"
+          INSTALLED=$((INSTALLED + 1))
+        else
+          mkdir -p "$(dirname "$REFERENCE_README")"
+          cat > "$REFERENCE_README" <<'REFREADME'
+# .claude/reference/
+
+Read-only canonical Drupal patterns vendored for the coding agent.
+
+## Rules
+
+- **Read-only**: never modify files under this directory by hand.
+- **Never enable**: these modules are reference material only — do not
+  install or enable them in the Drupal site.
+- **Never copy verbatim**: study the patterns and adapt them to the
+  project's own conventions (`.claude/conventions.md`) and naming.
+- **Refreshed by setup.sh**: re-running `bin/setup.sh` re-clones these
+  when the Drupal major changes. Use `--force` to force a refresh.
+
+## Note
+
+This directory is gitignored. It exists only on local checkouts after
+running setup.sh, not in the repository.
+REFREADME
+          log_installed ".claude/reference/README.md"
+          INSTALLED=$((INSTALLED + 1))
+        fi
+      fi
     fi
   fi
 fi

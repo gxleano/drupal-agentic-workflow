@@ -1,20 +1,29 @@
-# Drupal 11 Coding Rules — Template
+# Drupal Coding Rules — Template
 
 > This file is the source of managed rules injected into your project's `CLAUDE.md`.
 > Lines 1-3 are skipped by setup.sh. Content below the `---` is what gets inserted.
 
 ---
 
-## Critical Code Rules (Always Follow)
+## Version-specific guidance
 
-### PHP / Drupal 11
-- `declare(strict_types=1)` on all new PHP files
-- `protected readonly` constructor property promotion for injected services
-- PHP attributes (`#[Block]`, `#[Hook]`) instead of docblock annotations
-- `match` instead of `switch` for simple conditionals
-- `static` instead of `self` in `create()` methods and factories
-- Fully type all parameters, properties, and return types
-- 2-space indentation, `\Exception` not `use Exception`, `@todo` not `TODO:`
+See `.claude/drupal-version-guide.md` for version-specific patterns; prefer it over generic Drupal advice.
+
+See `.claude/reference/examples/` for the canonical-patterns reference codebase (downloaded by setup, never installed by Drupal, gitignored) — use it as the source of truth for idiomatic, working examples before improvising.
+
+## Managed `.gitignore` block
+
+This workflow maintains an append-only block in your project `.gitignore`, delimited by the markers:
+
+```
+# >>> drupal-agentic-workflow >>>
+…
+# <<< drupal-agentic-workflow <<<
+```
+
+Everything between these markers is managed by `setup.sh` and refreshed on re-run. Do not edit, reorder, or "fix" these lines by hand — your changes will be overwritten. Add your own ignores outside the block.
+
+## Critical Code Rules (Always Follow)
 
 ### Dependency Injection
 - Constructor injection with interfaces (`EntityTypeManagerInterface`, not `EntityTypeManager`)
@@ -23,13 +32,10 @@
 - Fall back to explicit `create()` only when runtime logic decides dependencies
 
 ### Plugins
-- `#[Block(...)]` attribute, not `@Block(...)` annotation
 - `final class` unless extension is explicitly intended
 - Fully typed constructor params: `string $plugin_id`, `array $plugin_definition`
 
 ### Hooks
-- `#[Hook]` attribute classes in `src/Hook/` for all new hooks
-- Only `hook_theme()`, `hook_preprocess_*()`, `hook_install()`, `hook_update_N()` stay in `.module`
 - Group related hooks by domain (`FormHooks`, `EntityHooks`)
 - Inject services via constructor, never `\Drupal::` in hook classes
 
@@ -57,13 +63,8 @@
 1. Missing `accessCheck()` on entity queries
 2. Using `\Drupal::` in service classes — inject via constructor
 3. Missing `#cache` on render arrays
-4. `@Block` annotation instead of `#[Block]` attribute
-5. Hooks in `.module` that should be in `src/Hook/`
-6. Missing config schema for custom config
-7. `switch` instead of `match` for simple conditionals
-8. `self` instead of `static` in `create()` methods
-9. Missing `declare(strict_types=1)` on new PHP files
-10. Business logic in controllers/hooks instead of services
+4. Missing config schema for custom config
+5. Business logic in controllers/hooks instead of services
 
 ## Skills Reference
 
@@ -123,6 +124,7 @@ Before generating code, **read the relevant files in `.claude/`** — they captu
 
 | File | When to read it |
 |------|-----------------|
+| `.claude/drupal-version-guide.md` | Before writing any PHP — version-specific patterns (PHP version, hook attribute style, Symfony/CKEditor versions) for the Drupal core in use. |
 | `.claude/conventions.md` | Before writing PHP/JS/CSS — adoption stats for hook style, DI, `match`/`switch`, etc. Match what the codebase actually does, not the textbook. |
 | `.claude/project-map.md` | Before touching the data model, routes, or services — structural overview of content types, fields, roles, routes per module, and services per module. |
 | `.claude/glossary.md` | Before naming things — domain terms (German/English) used in UI, code, and commits. |
@@ -132,5 +134,6 @@ Before generating code, **read the relevant files in `.claude/`** — they captu
 | `.claude/stack.json` | Detected stack snapshot (PHP/Drupal/frontend versions, integrations). Source of truth for tooling assumptions. |
 | `.claude/skills-recommended.md` | Capability → skill mapping for this project. Refer to it when picking which skill to invoke. |
 | `.claude/gaps.md` | Capabilities without an installed skill + drift warnings — useful when planning new tooling. |
+| `.claude/reference/examples/` | Canonical Drupal patterns checkout — read before improvising. Managed by setup, gitignored, never installed by Drupal. |
 
-These files are scaffolded by `drupal-agentic-workflow` setup. Conventions/stack/gaps are auto-generated and refreshed on re-run; glossary/external-systems/test-fixtures/decisions are filled in by the team and preserved across re-runs.
+These files are scaffolded by `drupal-agentic-workflow` setup. Conventions/stack/gaps/version-guide are auto-generated and refreshed on re-run; glossary/external-systems/test-fixtures/decisions are filled in by the team and preserved across re-runs.
