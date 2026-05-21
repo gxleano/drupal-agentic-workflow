@@ -66,6 +66,12 @@ INSTALLED=0
 UP_TO_DATE=0
 SKIPPED=0
 
+# Per-artifact status flags consumed by the Phase 8 summary. Set by Phase 7f
+# (version guide), 7g (Examples checkout), and 7h (gitignore managed block).
+VERSION_GUIDE_STATUS="skipped"
+EXAMPLES_STATUS="skipped"
+GITIGNORE_STATUS="skipped"
+
 # ---------------------------------------------------------------------------
 # Flags / defaults
 # ---------------------------------------------------------------------------
@@ -279,6 +285,170 @@ examples_branch_for_major() {
 # ---------------------------------------------------------------------------
 warn() {
   echo "  ${YELLOW}⚠${RESET} $*" >&2
+}
+
+# ---------------------------------------------------------------------------
+# Helper: update_gitignore_managed_block GITIGNORE_PATH
+#
+# Idempotently maintain a managed block in a `.gitignore` (or any text file)
+# delimited by:
+#
+#     # >>> drupal-agentic-workflow >>>
+#     ...
+#     # <<< drupal-agentic-workflow <<<
+#
+# The block is reconciled — required lines (defined below) are added if
+# missing, but any extra lines a user has added inside the block are kept
+# in place. Lines OUTSIDE the markers are never touched.
+#
+# Respects $DRY_RUN. Updates $INSTALLED / $UP_TO_DATE accordingly.
+#
+# Echoes one of: "installed", "up-to-date", "dry-run-installed",
+# "dry-run-up-to-date" — callers can capture for Phase 8 summary state.
+# ---------------------------------------------------------------------------
+GITIGNORE_BLOCK_START="# >>> drupal-agentic-workflow >>>"
+GITIGNORE_BLOCK_END="# <<< drupal-agentic-workflow <<<"
+GITIGNORE_REQUIRED_LINES=(
+  "web/modules/custom/**/AI_CONTEXT.md"
+  ".claude/reference/"
+)
+
+update_gitignore_managed_block() {
+  local gitignore="$1"
+  local relative="${gitignore#"$TARGET_DIR"/}"
+  local need_required=()
+  local kept_extras=()
+  local in_block=0
+  local has_block=0
+
+  if [[ -f "$gitignore" ]] && grep -qF "$GITIGNORE_BLOCK_START" "$gitignore"; then
+    has_block=1
+    # Read the existing block contents, separating required vs extra lines.
+    local existing_block=()
+    while IFS= read -r line; do
+      if [[ "$line" == "$GITIGNORE_BLOCK_START" ]]; then
+        in_block=1
+        continue
+      fi
+      if [[ "$line" == "$GITIGNORE_BLOCK_END" ]]; then
+        in_block=0
+        continue
+      fi
+      if [[ "$in_block" == 1 ]]; then
+        existing_block+=("$line")
+      fi
+    done < "$gitignore"
+
+    # Identify required lines already present and any extra (user) lines.
+    local req
+    for line in "${existing_block[@]}"; do
+      local is_required=0
+      for req in "${GITIGNORE_REQUIRED_LINES[@]}"; do
+        if [[ "$line" == "$req" ]]; then
+          is_required=1
+          break
+        fi
+      done
+      if [[ "$is_required" == 0 ]]; then
+        kept_extras+=("$line")
+      fi
+    done
+
+    # Determine which required lines are missing.
+    for req in "${GITIGNORE_REQUIRED_LINES[@]}"; do
+      local found=0
+      for line in "${existing_block[@]}"; do
+        if [[ "$line" == "$req" ]]; then
+          found=1
+          break
+        fi
+      done
+      if [[ "$found" == 0 ]]; then
+        need_required+=("$req")
+      fi
+    done
+  else
+    # File missing the block entirely — every required line is "missing".
+    need_required=("${GITIGNORE_REQUIRED_LINES[@]}")
+  fi
+
+  # If the block already exists and no required lines are missing, we're done.
+  if [[ "$has_block" == 1 && ${#need_required[@]} -eq 0 ]]; then
+    log_up_to_date "$relative (managed block)"
+    UP_TO_DATE=$((UP_TO_DATE + 1))
+    GITIGNORE_STATUS="up-to-date"
+    return 0
+  fi
+
+  if [[ "$DRY_RUN" == true ]]; then
+    if [[ "$has_block" == 1 ]]; then
+      log_installed "$relative (reconciled managed block) (dry-run)"
+    else
+      log_installed "$relative (added managed block) (dry-run)"
+    fi
+    INSTALLED=$((INSTALLED + 1))
+    GITIGNORE_STATUS="installed"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$gitignore")"
+
+  if [[ "$has_block" == 1 ]]; then
+    # Rebuild block in place: required lines (in canonical order), then
+    # any extra user-added lines preserved as-is.
+    local tmp tmp_body
+    tmp=$(mktemp)
+    tmp_body=$(mktemp)
+    {
+      for req in "${GITIGNORE_REQUIRED_LINES[@]}"; do
+        echo "$req"
+      done
+      for extra in "${kept_extras[@]}"; do
+        echo "$extra"
+      done
+    } > "$tmp_body"
+
+    awk -v start="$GITIGNORE_BLOCK_START" -v end="$GITIGNORE_BLOCK_END" \
+        -v body_file="$tmp_body" '
+      BEGIN { skip = 0 }
+      $0 == start {
+        print start
+        while ((getline line < body_file) > 0) print line
+        close(body_file)
+        print end
+        skip = 1
+        next
+      }
+      $0 == end {
+        if (skip == 1) { skip = 0; next }
+        print
+        next
+      }
+      !skip { print }
+    ' "$gitignore" > "$tmp"
+
+    mv "$tmp" "$gitignore"
+    rm -f "$tmp_body"
+    log_installed "$relative (reconciled managed block)"
+  else
+    # No block present (file may or may not exist) — append it.
+    {
+      if [[ -f "$gitignore" && -n "$(tail -c1 "$gitignore" 2>/dev/null)" ]]; then
+        echo ""
+      fi
+      if [[ -s "$gitignore" ]]; then
+        echo ""
+      fi
+      echo "$GITIGNORE_BLOCK_START"
+      for req in "${GITIGNORE_REQUIRED_LINES[@]}"; do
+        echo "$req"
+      done
+      echo "$GITIGNORE_BLOCK_END"
+    } >> "$gitignore"
+    log_installed "$relative (added managed block)"
+  fi
+  INSTALLED=$((INSTALLED + 1))
+  GITIGNORE_STATUS="installed"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1214,9 +1384,11 @@ else
           log_installed ".claude/drupal-version-guide.md (from ${VG_TEMPLATE_REL#assets/knowledge/drupal/})"
           INSTALLED=$((INSTALLED + 1))
         fi
+        VERSION_GUIDE_STATUS="installed (Drupal $VG_DRUPAL_CORE)"
       else
         log_up_to_date ".claude/drupal-version-guide.md (Drupal $VG_DRUPAL_CORE)"
         UP_TO_DATE=$((UP_TO_DATE + 1))
+        VERSION_GUIDE_STATUS="up-to-date (Drupal $VG_DRUPAL_CORE)"
       fi
     fi
   fi
@@ -1296,13 +1468,17 @@ else
 MARKER
             log_installed ".claude/reference/examples (branch $EXAMPLES_BRANCH for Drupal $DRUPAL_MAJOR)"
             INSTALLED=$((INSTALLED + 1))
+            EXAMPLES_STATUS="installed (branch $EXAMPLES_BRANCH, Drupal $DRUPAL_MAJOR)"
           else
             warn "git clone of Drupal Examples module failed — skipping"
+            EXAMPLES_STATUS="failed (git clone error)"
           fi
         fi
+        [[ "$DRY_RUN" == true ]] && EXAMPLES_STATUS="installed (branch $EXAMPLES_BRANCH, Drupal $DRUPAL_MAJOR)"
       else
         log_up_to_date ".claude/reference/examples (Drupal $DRUPAL_MAJOR, branch $EXAMPLES_BRANCH)"
         UP_TO_DATE=$((UP_TO_DATE + 1))
+        EXAMPLES_STATUS="up-to-date (branch $EXAMPLES_BRANCH, Drupal $DRUPAL_MAJOR)"
       fi
 
       # Install reference README once (idempotent).
@@ -1342,6 +1518,14 @@ REFREADME
     fi
   fi
 fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 7h — Patch project .gitignore with a managed block
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 7h: .gitignore managed block${RESET}"
+
+update_gitignore_managed_block "$TARGET_DIR/.gitignore"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase 7b — Write recommended-skills doc from detector output
@@ -1566,8 +1750,39 @@ echo "  ${GREEN}Installed${RESET} : ${INSTALLED} files"
 echo "  ${GRAY}Up to date${RESET}: ${UP_TO_DATE} files"
 echo "  ${YELLOW}Skipped${RESET}   : ${SKIPPED} files (customized, not overwritten)"
 echo ""
+echo "  ${BOLD}Version-aware artifacts${RESET}"
+echo "    Version guide   : ${VERSION_GUIDE_STATUS}"
+echo "    Examples checkout: ${EXAMPLES_STATUS}"
+echo "    gitignore block : ${GITIGNORE_STATUS}"
+echo ""
 echo "══════════════════════════════════════════════"
 echo ""
+
+# ---------------------------------------------------------------------------
+# Notice: AI_CONTEXT.md files already tracked by git
+#
+# These should be gitignored (see Phase 7h). We never run git mutations
+# automatically — print the exact command the user can run themselves.
+# ---------------------------------------------------------------------------
+if command -v git &>/dev/null && [[ -d "$TARGET_DIR/.git" ]]; then
+  TRACKED_AI_CONTEXT="$( (cd "$TARGET_DIR" && git ls-files web/modules/custom/*/AI_CONTEXT.md 2>/dev/null) || true )"
+  if [[ -n "$TRACKED_AI_CONTEXT" ]]; then
+    echo "  ${YELLOW}⚠ AI_CONTEXT.md files are already tracked by git${RESET}"
+    echo "    These are intended to be gitignored (the managed block in"
+    echo "    .gitignore was just added/updated). Untrack them with:"
+    echo ""
+    # Build a single-line command listing all files.
+    UNTRACK_ARGS=""
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      UNTRACK_ARGS+=" $f"
+    done <<< "$TRACKED_AI_CONTEXT"
+    echo "      git rm --cached${UNTRACK_ARGS}"
+    echo ""
+    echo "    (drupal-agentic-workflow does not run git mutations for you.)"
+    echo ""
+  fi
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase 9 — Interactive follow-ups (optionally launch claude per task)
