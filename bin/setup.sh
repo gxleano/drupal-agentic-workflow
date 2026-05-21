@@ -529,6 +529,77 @@ write_managed_block() {
   echo "$END_MARKER"
 }
 
+# ---------------------------------------------------------------------------
+# Version-guide pointer block — idempotently injected into CLAUDE.md so the
+# coding agent always sees a one-line reference to the per-version Drupal
+# guide rendered by Phase 7f. The marker comment lets future setup.sh runs
+# locate and rewrite the line without duplicating.
+# ---------------------------------------------------------------------------
+VERSION_GUIDE_POINTER_MARKER="<!-- drupal-agentic-workflow: version-guide-pointer -->"
+VERSION_GUIDE_POINTER_LINE="See \`.claude/drupal-version-guide.md\` for version-specific patterns; prefer it over generic Drupal advice."
+
+ensure_version_guide_pointer() {
+  local claude_md="$TARGET_DIR/CLAUDE.md"
+  [[ -f "$claude_md" ]] || return 0
+
+  if grep -qF "$VERSION_GUIDE_POINTER_MARKER" "$claude_md"; then
+    # Marker present: extract the line directly below it and compare.
+    local current_line
+    current_line="$(awk -v m="$VERSION_GUIDE_POINTER_MARKER" '
+      $0 == m { getline nxt; print nxt; exit }
+    ' "$claude_md")"
+
+    if [[ "$current_line" == "$VERSION_GUIDE_POINTER_LINE" ]]; then
+      log_up_to_date "CLAUDE.md (version-guide pointer)"
+      UP_TO_DATE=$((UP_TO_DATE + 1))
+      return 0
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+      log_installed "CLAUDE.md (refreshed version-guide pointer) (dry-run)"
+      INSTALLED=$((INSTALLED + 1))
+      return 0
+    fi
+
+    # Rewrite the marker + the immediately following line atomically.
+    local tmp
+    tmp=$(mktemp)
+    awk -v marker="$VERSION_GUIDE_POINTER_MARKER" -v line="$VERSION_GUIDE_POINTER_LINE" '
+      $0 == marker {
+        print marker
+        print line
+        # Drop the next line (the stale pointer text).
+        getline _drop
+        next
+      }
+      { print }
+    ' "$claude_md" > "$tmp"
+    mv "$tmp" "$claude_md"
+    log_installed "CLAUDE.md (refreshed version-guide pointer)"
+    INSTALLED=$((INSTALLED + 1))
+    return 0
+  fi
+
+  # Marker missing: append the pointer block to the end of the file.
+  if [[ "$DRY_RUN" == true ]]; then
+    log_installed "CLAUDE.md (added version-guide pointer) (dry-run)"
+    INSTALLED=$((INSTALLED + 1))
+    return 0
+  fi
+
+  {
+    # Ensure file ends with a newline before appending a separating blank line.
+    if [[ -n "$(tail -c1 "$claude_md")" ]]; then
+      echo ""
+    fi
+    echo ""
+    echo "$VERSION_GUIDE_POINTER_MARKER"
+    echo "$VERSION_GUIDE_POINTER_LINE"
+  } >> "$claude_md"
+  log_installed "CLAUDE.md (added version-guide pointer)"
+  INSTALLED=$((INSTALLED + 1))
+}
+
 if [[ -f "$TARGET_DIR/CLAUDE.md" ]]; then
   if grep -qF "$START_MARKER" "$TARGET_DIR/CLAUDE.md"; then
     # ── New markers found: replace content between them ──────────────
@@ -612,6 +683,11 @@ else
   fi
   INSTALLED=$((INSTALLED + 1))
 fi
+
+# Inject (or refresh) the one-line pointer to the per-version Drupal guide
+# that Phase 7f renders. This extends the CLAUDE.md merge step — it must
+# stay attached to Phase 3 so the pointer exists regardless of detection.
+ensure_version_guide_pointer
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase 4 — Install .prettierrc.json (if missing)
@@ -1050,6 +1126,98 @@ else
       fi
     else
       echo "  ${YELLOW}⚠ Stack detection failed — run manually: node .claude/tools/detect.mjs --print${RESET}" >&2
+    fi
+  fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 7f — Render the version-specific Drupal guide
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 7f: Drupal version guide${RESET}"
+
+VERSION_GUIDE_DEST="$TARGET_DIR/.claude/drupal-version-guide.md"
+VERSION_GUIDE_STACK_JSON="$TARGET_DIR/.claude/stack.json"
+
+if [[ ! -f "$VERSION_GUIDE_STACK_JSON" ]]; then
+  echo "  ${GRAY}No stack.json found (detection skipped or failed) — skipping${RESET}"
+else
+  # Read backend.drupal_core; prefer jq, fall back to grep/sed (mirrors 7g).
+  VG_DRUPAL_CORE=""
+  if command -v jq &>/dev/null; then
+    VG_DRUPAL_CORE="$(jq -r '.backend.drupal_core // ""' "$VERSION_GUIDE_STACK_JSON" 2>/dev/null || echo "")"
+  else
+    VG_DRUPAL_CORE="$(grep -o '"drupal_core"[[:space:]]*:[[:space:]]*"[^"]*"' "$VERSION_GUIDE_STACK_JSON" 2>/dev/null \
+      | head -1 | sed 's/.*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "")"
+  fi
+
+  if [[ -z "$VG_DRUPAL_CORE" ]]; then
+    warn "Could not determine Drupal core version from stack.json — skipping version guide render"
+  else
+    # Derive major and minor (e.g. "10.3.5" → major=10, minor=3).
+    VG_MAJOR="${VG_DRUPAL_CORE%%.*}"
+    VG_REST="${VG_DRUPAL_CORE#*.}"
+    VG_MINOR="${VG_REST%%.*}"
+    # Guard against drupal_core values like "10" (no minor segment).
+    if [[ "$VG_MINOR" == "$VG_DRUPAL_CORE" ]]; then
+      VG_MINOR=""
+    fi
+
+    # Select template directory by major.minor when available, else fall back.
+    VG_TEMPLATE_REL=""
+    case "$VG_MAJOR" in
+      10)
+        case "$VG_MINOR" in
+          3) VG_TEMPLATE_REL="assets/knowledge/drupal/10.3/guide.md" ;;
+          4) VG_TEMPLATE_REL="assets/knowledge/drupal/10.4/guide.md" ;;
+          *)
+            VG_TEMPLATE_REL="assets/knowledge/drupal/10.4/guide.md"
+            warn "No exact match for Drupal $VG_DRUPAL_CORE — falling back to 10.4 guide"
+            ;;
+        esac
+        ;;
+      11)
+        VG_TEMPLATE_REL="assets/knowledge/drupal/11.x/guide.md"
+        ;;
+      12)
+        VG_TEMPLATE_REL="assets/knowledge/drupal/11.x/guide.md"
+        warn "No guide for Drupal $VG_DRUPAL_CORE yet — falling back to 11.x guide"
+        ;;
+      *)
+        VG_TEMPLATE_REL="assets/knowledge/drupal/11.x/guide.md"
+        warn "Unrecognized Drupal major '$VG_MAJOR' — falling back to 11.x guide"
+        ;;
+    esac
+
+    VG_TEMPLATE_SRC="$TEMPLATE_DIR/$VG_TEMPLATE_REL"
+
+    if [[ ! -f "$VG_TEMPLATE_SRC" ]]; then
+      warn "Version guide template not found at ${VG_TEMPLATE_REL} — skipping"
+    else
+      # Determine action: force re-render, fresh install, up-to-date, or refresh.
+      VG_NEEDS_WRITE=false
+      if [[ ! -f "$VERSION_GUIDE_DEST" ]]; then
+        VG_NEEDS_WRITE=true
+      elif [[ "$FORCE" == true ]]; then
+        VG_NEEDS_WRITE=true
+      elif ! cmp -s "$VG_TEMPLATE_SRC" "$VERSION_GUIDE_DEST"; then
+        VG_NEEDS_WRITE=true
+      fi
+
+      if [[ "$VG_NEEDS_WRITE" == true ]]; then
+        if [[ "$DRY_RUN" == true ]]; then
+          log_installed ".claude/drupal-version-guide.md (from ${VG_TEMPLATE_REL#assets/knowledge/drupal/}) (dry-run)"
+          INSTALLED=$((INSTALLED + 1))
+        else
+          mkdir -p "$(dirname "$VERSION_GUIDE_DEST")"
+          cp "$VG_TEMPLATE_SRC" "$VERSION_GUIDE_DEST"
+          log_installed ".claude/drupal-version-guide.md (from ${VG_TEMPLATE_REL#assets/knowledge/drupal/})"
+          INSTALLED=$((INSTALLED + 1))
+        fi
+      else
+        log_up_to_date ".claude/drupal-version-guide.md (Drupal $VG_DRUPAL_CORE)"
+        UP_TO_DATE=$((UP_TO_DATE + 1))
+      fi
     fi
   fi
 fi
