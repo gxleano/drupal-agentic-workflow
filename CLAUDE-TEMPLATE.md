@@ -44,6 +44,16 @@ Everything between these markers is managed by `setup.sh` and refreshed on re-ru
 - Document array structures (`@param array{key: type}`), side effects, and `@throws`
 - `{@inheritdoc}` for overridden methods
 
+### phpcs compliance — get it right on the first pass
+`phpcbf` auto-fixes whitespace, indentation, and array syntax, but it has **no fixer** for the rules below — they survive auto-fix and surface as phpcs errors. Produce them correctly when generating code:
+- **File doc comment**: every `.module`/`.inc`/`.install`/`.profile` file opens with a `@file` block; class files do not (one class per file).
+- **Function/method docblocks**: a one-line summary ending in `.`, then `@param`/`@return`/`@throws` as needed — or `{@inheritdoc}` when overriding. Missing docblocks (`Drupal.Commenting.FunctionComment.Missing`) are the #1 survivor.
+- **Comment line length ≤ 80 chars** (`Drupal.Files.LineLength`) — code lines are exempt, comments are not. Wrap long comments.
+- **No unused `use` statements** and alphabetical `use` ordering.
+- **Inline comments** are full sentences starting with a capital and ending in `.`, `!`, or `?`.
+- **`@var` on every class property**; `@code`/`@endcode` for code samples in docblocks.
+- **`t()` strings are literal** — no concatenation or variables inside `t()`; use `@placeholder`/`%placeholder` args.
+
 ### Testing
 - Tests are expected for production code — use `/generate-tests` to scaffold them
 - Unit tests for services with pure logic, Kernel tests for entity/DB interactions, Functional tests for user workflows

@@ -28,9 +28,19 @@ Prevents Claude from running destructive operations that are hard to reverse.
 | `git clean -f` | Permanently deletes untracked files |
 | `git push --force` / `git push -f` | Rewrites remote history |
 | `git branch -D` | Force-deletes a branch without merge check |
-| `rm -rf /` / `rm -rf .` | Catastrophic file deletion |
+| `rm -rf /` / `rm -rf .` / `rm -rf ~` / `rm -rf $HOME` | Catastrophic file deletion |
 | `ddev delete` | Destroys the DDEV project and its database |
 | `DROP TABLE` / `DROP DATABASE` | Permanently destroys database objects |
+| `drush sql:drop` / `sql-drop` | Drops every table in the database |
+| `drush sql:query`/`sql:cli` with `DROP`/`TRUNCATE`/`DELETE` | Destroys data |
+| `drush entity:delete` | Bulk-deletes content entities |
+| `drush field:delete` | Removes a field and all its data |
+| `drush state:delete` | Removes persisted system state |
+| `drush user:cancel` | Cancels/deletes user accounts and their content |
+
+Drush patterns match both the `cmd:sub` and legacy `cmd-sub` separators.
+
+> **This is a guardrail, not a sandbox.** It pattern-matches command strings, so a determined or obfuscated command (env-prefixed, `eval`, `;`-chained, aliased) can still slip through. It catches the common accidents — it is not a security boundary.
 
 ### How It Works
 
@@ -82,8 +92,14 @@ File modified by Claude
 
 ### Backend Tools
 
-- **phpcbf** — Auto-fixes coding standard violations (runs before phpcs, best-effort)
-- **phpcs** — Drupal coding standards (Drupal + DrupalPractice), runs inside DDEV via `ddev exec`
+- **phpcbf** — Auto-fixes coding standard violations (runs before phpcs, best-effort). Many sniffs (missing docblocks, `@file`, comment line length, `t()` literals) have **no fixer** and survive to phpcs.
+- **phpcs** — Runs with `-s` so sniff codes are shown, making remaining violations actionable. When phpcbf rewrote the file, the feedback includes a note that the on-disk file is now stale and must be re-read before further edits.
+
+#### Standard & runner resolution
+
+- **Standard**: prefers the project's own ruleset (`phpcs.xml`, then `phpcs.xml.dist`) so the hook agrees with CI exactly; falls back to the bundled `Drupal,DrupalPractice` (with the default extension list) when no ruleset is present.
+- **Runner**: prefers `ddev exec` when a `.ddev/config.yaml` exists; falls back to `vendor/bin/phpcs`/`phpcbf` when ddev isn't the toolchain. If neither is available, the PHP CS step is skipped with a one-line install hint instead of failing silently.
+- **Broken Coder install** (missing standard / binary) is detected in tool output and reported as a setup problem with the `composer require --dev drupal/coder` + `--config-set installed_paths` fix, rather than masquerading as a code error.
 - **security-perf-scan** — Fast local grep for dangerous patterns:
   - Security: `eval()`, `shell_exec()`, `passthru()`, `proc_open()`, `popen()`, `$_GET/$_POST/$_REQUEST`, `unserialize()`, `extract()`
   - Performance: `\Drupal::` in `src/`, missing `accessCheck()` on entity queries
@@ -103,6 +119,7 @@ Prettier runs **before** linters on supported file types. This ensures linters c
 - **Graceful degradation**: Skipped silently if not installed
 - **Twig support**: Requires `prettier-plugin-twig-melody`
 - **PHP is excluded**: phpcbf/phpcs handles PHP formatting
+- **Drupal-managed YAML is excluded**: files under `config/` and module/theme definition YAML (`*.info.yml`, `*.routing.yml`, `*.services.yml`, `*.libraries.yml`, `*.permissions.yml`, `*.links.*.yml`, `*.breakpoints.yml`, `*.schema.yml`, `*.settings.yml`) are left untouched. Drupal's exporter uses its own YAML style, so prettier would cause `drush cex` churn and can alter semantically significant quoting. Generic `.yml`/`.yaml`/`.json` are still formatted.
 
 Install:
 ```bash

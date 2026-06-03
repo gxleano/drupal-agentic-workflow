@@ -93,10 +93,36 @@ is_twig() {
   return 1
 }
 
+# Drupal-managed YAML must NOT be reformatted by prettier. Drupal's config
+# exporter uses the Symfony YAML dumper with its own style and quoting, so
+# prettier produces a different-but-valid file that `drush cex` re-normalizes —
+# causing endless diff churn — and quoting changes (e.g. version: '1.0') can be
+# semantically significant. Covers config exports plus module/theme definition
+# and plugin YAML shipped in code.
+is_drupal_yaml() {
+  case "$EXT" in
+    yml|yaml) ;;
+    *) return 1 ;;
+  esac
+  # Anything under a config/ directory (config/sync, config/install, config/schema, …).
+  case "$FILE_PATH" in
+    */config/*) return 0 ;;
+  esac
+  case "$BASENAME" in
+    *.info.yml|*.routing.yml|*.services.yml|*.libraries.yml|\
+    *.permissions.yml|*.links.menu.yml|*.links.task.yml|*.links.action.yml|\
+    *.links.contextual.yml|*.menu.links.*.yml|*.breakpoints.yml|\
+    *.schema.yml|*.settings.yml)
+      return 0 ;;
+  esac
+  return 1
+}
+
 is_prettier_target() {
   is_javascript && return 0
   is_stylesheet && return 0
   is_twig && return 0
+  is_drupal_yaml && return 1
   case "$EXT" in
     yaml|yml|json) return 0 ;;
   esac
@@ -129,36 +155,118 @@ log_header
 if is_backend; then
   log_file "$FILE_PATH" "backend (PHP/Drupal)"
 
-  # Make the path relative to the project for ddev commands.
+  # Make the path relative to the project root (used as the target so both the
+  # ddev and vendor/bin runners resolve it identically from $PROJECT_DIR).
   REL_PATH="${FILE_PATH#"$PROJECT_DIR"/}"
 
-  # --- PHPCBF (auto-fix) ---
-  log_tool_start "phpcbf"
-  TOOLS_RUN+=("phpcbf")
-  PHPCBF_OUTPUT=""
-  PHPCBF_EXIT=0
-  PHPCBF_OUTPUT=$(ddev exec phpcbf --standard=Drupal,DrupalPractice \
-    --extensions=php,module,inc,install,test,profile,theme \
-    "$REL_PATH" 2>&1) || PHPCBF_EXIT=$?
+  # --- Resolve the phpcs/phpcbf runner ---------------------------------------
+  # Prefer ddev (matches the project's containerised toolchain and CI), but
+  # fall back to a vendored binary so the hook still works when ddev isn't the
+  # toolchain. If neither is available we skip the CS step loudly below.
+  PHP_RUNNER=""
+  PHPCS_BIN=""
+  PHPCBF_BIN=""
+  PHPCS_AVAILABLE=true
+  PHPCBF_FIXED=false
 
-  # phpcbf exit 1 = fixes applied (success), exit 2 = unfixable errors
-  if [[ "$PHPCBF_EXIT" -eq 1 ]]; then
-    echo "  phpcbf: auto-fixed coding standard violations" >&2
+  if command -v ddev &>/dev/null && [[ -f "$PROJECT_DIR/.ddev/config.yaml" ]]; then
+    PHP_RUNNER="ddev exec"
+    PHPCS_BIN="phpcs"
+    PHPCBF_BIN="phpcbf"
+  elif [[ -x "$PROJECT_DIR/vendor/bin/phpcs" ]]; then
+    PHPCS_BIN="$PROJECT_DIR/vendor/bin/phpcs"
+    PHPCBF_BIN="$PROJECT_DIR/vendor/bin/phpcbf"
+  else
+    PHPCS_AVAILABLE=false
+    echo "  Skipping phpcbf/phpcs: no ddev project and no vendor/bin/phpcs found." >&2
+    echo "  Install Coder so the hook can lint:" >&2
+    echo "    composer require --dev drupal/coder" >&2
   fi
-  log_tool_result "phpcbf" 0  # phpcbf is best-effort, not a blocker
 
-  # --- PHPCS ---
-  log_tool_start "phpcs"
-  TOOLS_RUN+=("phpcs")
-  PHPCS_OUTPUT=""
-  PHPCS_EXIT=0
-  PHPCS_OUTPUT=$(ddev exec phpcs --standard=Drupal,DrupalPractice --extensions=php,module,inc,install,test,profile,theme "$REL_PATH" 2>&1) || PHPCS_EXIT=$?
+  # Run a phpcs-family binary from the project root via the resolved runner.
+  # Usage: run_phpcs_tool <bin> [args...]
+  run_phpcs_tool() {
+    local bin="$1"; shift
+    # shellcheck disable=SC2086  # $PHP_RUNNER ("ddev exec") must word-split.
+    ( cd "$PROJECT_DIR" && $PHP_RUNNER "$bin" "$@" )
+  }
 
-  if [[ "$PHPCS_EXIT" -ne 0 ]]; then
-    echo "$PHPCS_OUTPUT" >&2
-    ERRORS=$((ERRORS + 1))
+  # --- Resolve the coding standard -------------------------------------------
+  # Prefer the project's own ruleset so the hook agrees with CI exactly (it can
+  # encode ignore patterns, PHPCompatibility testVersion, extra sniffs, etc.).
+  # A ruleset file already defines its extensions, so only pass --extensions
+  # for the bundled Drupal,DrupalPractice fallback.
+  CS_ARGS=()
+  if [[ -f "$PROJECT_DIR/phpcs.xml" ]]; then
+    CS_ARGS=(--standard=phpcs.xml)
+  elif [[ -f "$PROJECT_DIR/phpcs.xml.dist" ]]; then
+    CS_ARGS=(--standard=phpcs.xml.dist)
+  else
+    CS_ARGS=(--standard=Drupal,DrupalPractice
+             --extensions=php,module,inc,install,test,profile,theme)
   fi
-  log_tool_result "phpcs" "$PHPCS_EXIT"
+
+  # Detect a broken Coder install (missing standard / missing binary) in tool
+  # output so we report a setup problem instead of a phantom code problem.
+  is_setup_failure() {
+    grep -qiE 'coding standard .* is not installed|ERROR: the .* standard|command not found|executable file not found' <<< "$1"
+  }
+
+  if [[ "$PHPCS_AVAILABLE" == true ]]; then
+    # --- PHPCBF (auto-fix) ---
+    log_tool_start "phpcbf"
+    TOOLS_RUN+=("phpcbf")
+    PHPCBF_OUTPUT=""
+    PHPCBF_EXIT=0
+    PHPCBF_OUTPUT=$(run_phpcs_tool "$PHPCBF_BIN" "${CS_ARGS[@]}" "$REL_PATH" 2>&1) || PHPCBF_EXIT=$?
+
+    if is_setup_failure "$PHPCBF_OUTPUT"; then
+      echo "  phpcbf could not run — Coder standards not installed correctly:" >&2
+      echo "$PHPCBF_OUTPUT" >&2
+      echo "  Fix: composer require --dev drupal/coder && \\" >&2
+      echo "    vendor/bin/phpcs --config-set installed_paths vendor/drupal/coder/coder_sniffer" >&2
+      ERRORS=$((ERRORS + 1))
+      PHPCS_AVAILABLE=false
+    elif [[ "$PHPCBF_EXIT" -eq 1 ]]; then
+      # phpcbf exit 1 = fixable violations were fixed on disk.
+      echo "  phpcbf: auto-fixed coding standard violations on disk." >&2
+      PHPCBF_FIXED=true
+    fi
+    log_tool_result "phpcbf" 0  # phpcbf is best-effort, not a blocker
+  fi
+
+  if [[ "$PHPCS_AVAILABLE" == true ]]; then
+    # --- PHPCS (-s shows sniff codes so remaining violations are actionable) ---
+    log_tool_start "phpcs"
+    TOOLS_RUN+=("phpcs")
+    PHPCS_OUTPUT=""
+    PHPCS_EXIT=0
+    PHPCS_OUTPUT=$(run_phpcs_tool "$PHPCS_BIN" -s "${CS_ARGS[@]}" "$REL_PATH" 2>&1) || PHPCS_EXIT=$?
+
+    if [[ "$PHPCS_EXIT" -ne 0 ]]; then
+      echo "$PHPCS_OUTPUT" >&2
+      # phpcbf rewrote the file on disk; Claude's in-context copy is now stale.
+      # The violations above survived auto-fix (no fixer) and need manual edits.
+      if [[ "$PHPCBF_FIXED" == true ]]; then
+        echo "" >&2
+        echo "  NOTE: phpcbf modified $REL_PATH on disk — re-read it before editing" >&2
+        echo "  (your in-context copy is stale). The violations above have no" >&2
+        echo "  auto-fixer; fix them by hand using the sniff codes shown." >&2
+      fi
+      ERRORS=$((ERRORS + 1))
+    elif [[ "$PHPCBF_FIXED" == true ]]; then
+      # phpcs is clean, but phpcbf still rewrote the file on disk this run, so
+      # Claude's in-context copy is stale. Emit a blocking note (exit 2) so the
+      # warning actually reaches Claude — otherwise the next Edit's old_string
+      # would be matched against pre-fix content and fail (or reintroduce it).
+      echo "" >&2
+      echo "  NOTE: phpcbf auto-fixed $REL_PATH on disk and phpcs now passes." >&2
+      echo "  Re-read the file before any further edit — your in-context copy is" >&2
+      echo "  stale, so an old_string from before the fix will no longer match." >&2
+      ERRORS=$((ERRORS + 1))
+    fi
+    log_tool_result "phpcs" "$PHPCS_EXIT"
+  fi
 
   # --- Security & Performance scan (local grep, no Docker — ~10-50ms) ---
   log_tool_start "security-perf-scan"

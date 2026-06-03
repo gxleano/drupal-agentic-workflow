@@ -48,9 +48,41 @@ if echo "$COMMAND" | grep -qE 'rm\s+-[a-zA-Z]*rf?\s+/\s|rm\s+-[a-zA-Z]*rf?\s+\.$
   block "rm -rf on root/project directory — catastrophic file deletion"
 fi
 
+# rm -rf targeting the home directory (literal ~ or $HOME).
+if echo "$COMMAND" | grep -qE 'rm\s+-[a-zA-Z]*rf?\s+(~|\$HOME)(/[^[:space:]]*)?(\s|$)'; then
+  block "rm -rf on home directory — catastrophic file deletion"
+fi
+
 # ── Destructive DDEV operations ──────────────────────────────────────────────
 if echo "$COMMAND" | grep -qE 'ddev\s+delete\b'; then
   block "ddev delete — destroys the DDEV project and its database"
+fi
+
+# ── Destructive Drush operations ─────────────────────────────────────────────
+# Drush accepts both the `cmd:sub` and legacy `cmd-sub` separators, so match
+# either. These wipe the database, content, or critical state with no undo.
+if echo "$COMMAND" | grep -qE 'drush\s+([a-z-]+\s+)*sql[:-]drop\b'; then
+  block "drush sql:drop — drops every table in the database"
+fi
+
+if echo "$COMMAND" | grep -qiE 'drush\s+.*sql[:-](query|cli).*\b(DROP|TRUNCATE|DELETE)\b'; then
+  block "drush sql:query with DROP/TRUNCATE/DELETE — destroys data"
+fi
+
+if echo "$COMMAND" | grep -qE 'drush\s+([a-z-]+\s+)*entity[:-]delete\b'; then
+  block "drush entity:delete — bulk-deletes content entities"
+fi
+
+if echo "$COMMAND" | grep -qE 'drush\s+([a-z-]+\s+)*field[:-]delete\b'; then
+  block "drush field:delete — removes a field and all its data"
+fi
+
+if echo "$COMMAND" | grep -qE 'drush\s+([a-z-]+\s+)*state[:-]delete\b'; then
+  block "drush state:delete — removes persisted system state"
+fi
+
+if echo "$COMMAND" | grep -qE 'drush\s+([a-z-]+\s+)*user[:-]cancel\b'; then
+  block "drush user:cancel — cancels/deletes user accounts and their content"
 fi
 
 # ── Destructive SQL operations ───────────────────────────────────────────────
