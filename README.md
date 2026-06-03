@@ -56,6 +56,22 @@ bin/setup.sh /path/to/project
   ├─ Phase 7e  : project-map.mjs   → .claude/project-map.md
   │              (content types, fields, roles, routes, services, splits)
   │
+  ├─ Phase 7f  : renders           → .claude/drupal-version-guide.md
+  │              (per-version Drupal guide picked from
+  │              assets/knowledge/drupal/<version>/ based on stack.json)
+  │
+  ├─ Phase 7g  : vendors           → .claude/reference/examples/
+  │              (clones the matching Examples module branch — see
+  │              examples_branch_for_major() in bin/setup.sh — for
+  │              offline-friendly reference code)
+  │
+  ├─ Phase 7h  : patches           → .gitignore (managed block)
+  │              (inserts/updates the `# >>> drupal-agentic-workflow >>>`
+  │              … `# <<< drupal-agentic-workflow <<<` block; lines
+  │              outside the markers are never touched; may print a
+  │              `git rm --cached` notice for already-tracked
+  │              AI_CONTEXT.md files)
+  │
   ├─ Phase 8   : Summary (installed / up-to-date / skipped counts)
   │
   └─ Phase 9   : Offer to launch `claude` for the 4 manual next-step tasks;
@@ -489,6 +505,37 @@ your-drupal-project/
 ```
 
 The **AUTO** files refresh on each `setup.sh` run (so they reflect the current code). The **SCAFFOLD** files are templates — the script never overwrites your edits.
+
+## Maintenance: Examples module branch mapping
+
+Phase 7g vendors the [Examples for Developers](https://www.drupal.org/project/examples) project into `.claude/reference/examples/` so agents have offline-friendly reference code that matches the project's Drupal major version. The Drupal-major → Examples-branch mapping lives in the `examples_branch_for_major()` shell function inside [`bin/setup.sh`](bin/setup.sh).
+
+Current mapping:
+
+| Drupal major | Examples branch |
+|--------------|-----------------|
+| 10           | `4.0.x`         |
+| 11           | `4.0.x`         |
+
+Update this function whenever the Examples project ships a new per-major branch (for example, when a future `5.0.x` branch is published for Drupal 12). Add the new `case` arm, keep existing majors pointing at the branch they currently track, and bump the default fallback only after verifying the new branch exists on drupal.org.
+
+For per-version Drupal guide templates (rendered by Phase 7f), see [`assets/knowledge/drupal/README.md`](assets/knowledge/drupal/README.md) — it documents the directory layout under `assets/knowledge/drupal/<version>/` and how to add or update a version-specific guide.
+
+## Managed `.gitignore` block
+
+Phase 7h reconciles a managed block inside your project's `.gitignore`, delimited by:
+
+```
+# >>> drupal-agentic-workflow >>>
+# ... entries managed by setup.sh ...
+# <<< drupal-agentic-workflow <<<
+```
+
+Rules:
+
+- **Lines outside the markers are never touched.** Your existing `.gitignore` entries are safe — setup only reads and rewrites the region between the two marker lines.
+- **User additions inside the block are preserved during reconciliation.** Setup merges the bundled defaults with any extra lines you've added inside the markers, so you can add project-specific ignores in there without losing them on re-run.
+- **`git rm --cached` notice in Phase 8.** If your repo already tracks `AI_CONTEXT.md` files that the new ignore rules would otherwise cover, Phase 8 prints a one-line notice listing them along with a ready-to-paste `git rm --cached <files>` command. Setup will **never** run that command automatically — untracking files is a destructive history-affecting operation, so it is left to you.
 
 ## Contributing
 

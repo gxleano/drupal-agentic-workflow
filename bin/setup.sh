@@ -9,7 +9,6 @@
 #   --skip-tools       Skip code quality tools detection/installation
 #   --skip-ai-context  Skip AI_CONTEXT.md generation prompt
 #   --skip-detect      Skip stack detection / skill gap analysis
-  --skip-followups   Skip the interactive "open claude for X" prompts at the end
 #   --skip-followups   Skip the interactive "open claude for X" prompts at the end
 #   --help             Show this help message
 #
@@ -65,6 +64,12 @@ fi
 INSTALLED=0
 UP_TO_DATE=0
 SKIPPED=0
+
+# Per-artifact status flags consumed by the Phase 8 summary. Set by Phase 7f
+# (version guide), 7g (Examples checkout), and 7h (gitignore managed block).
+VERSION_GUIDE_STATUS="skipped"
+EXAMPLES_STATUS="skipped"
+GITIGNORE_STATUS="skipped"
 
 # ---------------------------------------------------------------------------
 # Flags / defaults
@@ -192,6 +197,13 @@ log_skipped() {
   echo "  ${YELLOW}⊘ SKIPPED (customized):${RESET} $1"
 }
 
+# Sub-bullet note — used for secondary edits to a file already counted in
+# INSTALLED/UP_TO_DATE this run (e.g., the version-guide pointer appended
+# alongside the main CLAUDE.md merge). Does not affect counters.
+log_note() {
+  echo "    ${GRAY}↳${RESET} $1"
+}
+
 # ---------------------------------------------------------------------------
 # Helper: install_file SOURCE DEST
 #
@@ -252,6 +264,197 @@ install_file_executable() {
     fi
     INSTALLED=$((INSTALLED + 1))
   fi
+}
+
+# ---------------------------------------------------------------------------
+# Helper: examples_branch_for_major MAJOR
+#
+# Returns the branch name of the Drupal Examples module that corresponds to
+# the given Drupal core major version. Echoes empty string for unmapped
+# majors — callers should `warn` and skip when that happens.
+#
+# MAINTAINER NOTE: When a new Drupal major ships, check the Examples project
+# page at https://www.drupal.org/project/examples for the supported branch
+# and add a new case below.
+# ---------------------------------------------------------------------------
+examples_branch_for_major() {
+  local major="$1"
+  case "$major" in
+    10) echo "4.0.x" ;;
+    11) echo "4.0.x" ;;
+    *)  echo "" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Helper: warn — write a yellow warning to stderr.
+# ---------------------------------------------------------------------------
+warn() {
+  echo "  ${YELLOW}⚠${RESET} $*" >&2
+}
+
+# ---------------------------------------------------------------------------
+# Helper: update_gitignore_managed_block GITIGNORE_PATH
+#
+# Idempotently maintain a managed block in a `.gitignore` (or any text file)
+# delimited by:
+#
+#     # >>> drupal-agentic-workflow >>>
+#     ...
+#     # <<< drupal-agentic-workflow <<<
+#
+# The block is reconciled — required lines (defined below) are added if
+# missing, but any extra lines a user has added inside the block are kept
+# in place. Lines OUTSIDE the markers are never touched.
+#
+# Respects $DRY_RUN. Updates $INSTALLED / $UP_TO_DATE accordingly.
+#
+# Echoes one of: "installed", "up-to-date", "dry-run-installed",
+# "dry-run-up-to-date" — callers can capture for Phase 8 summary state.
+# ---------------------------------------------------------------------------
+GITIGNORE_BLOCK_START="# >>> drupal-agentic-workflow >>>"
+GITIGNORE_BLOCK_END="# <<< drupal-agentic-workflow <<<"
+GITIGNORE_REQUIRED_LINES=(
+  "web/modules/custom/**/AI_CONTEXT.md"
+  ".claude/reference/"
+)
+
+update_gitignore_managed_block() {
+  local gitignore="$1"
+  local relative="${gitignore#"$TARGET_DIR"/}"
+  local need_required=()
+  local kept_extras=()
+  local in_block=0
+  local has_block=0
+
+  if [[ -f "$gitignore" ]] && grep -qF "$GITIGNORE_BLOCK_START" "$gitignore"; then
+    has_block=1
+    # Read the existing block contents, separating required vs extra lines.
+    local existing_block=()
+    while IFS= read -r line; do
+      if [[ "$line" == "$GITIGNORE_BLOCK_START" ]]; then
+        in_block=1
+        continue
+      fi
+      if [[ "$line" == "$GITIGNORE_BLOCK_END" ]]; then
+        in_block=0
+        continue
+      fi
+      if [[ "$in_block" == 1 ]]; then
+        existing_block+=("$line")
+      fi
+    done < "$gitignore"
+
+    # Identify required lines already present and any extra (user) lines.
+    local req
+    for line in "${existing_block[@]}"; do
+      local is_required=0
+      for req in "${GITIGNORE_REQUIRED_LINES[@]}"; do
+        if [[ "$line" == "$req" ]]; then
+          is_required=1
+          break
+        fi
+      done
+      if [[ "$is_required" == 0 ]]; then
+        kept_extras+=("$line")
+      fi
+    done
+
+    # Determine which required lines are missing.
+    for req in "${GITIGNORE_REQUIRED_LINES[@]}"; do
+      local found=0
+      for line in "${existing_block[@]}"; do
+        if [[ "$line" == "$req" ]]; then
+          found=1
+          break
+        fi
+      done
+      if [[ "$found" == 0 ]]; then
+        need_required+=("$req")
+      fi
+    done
+  else
+    # File missing the block entirely — every required line is "missing".
+    need_required=("${GITIGNORE_REQUIRED_LINES[@]}")
+  fi
+
+  # If the block already exists and no required lines are missing, we're done.
+  if [[ "$has_block" == 1 && ${#need_required[@]} -eq 0 ]]; then
+    log_up_to_date "$relative (managed block)"
+    UP_TO_DATE=$((UP_TO_DATE + 1))
+    GITIGNORE_STATUS="up-to-date"
+    return 0
+  fi
+
+  if [[ "$DRY_RUN" == true ]]; then
+    if [[ "$has_block" == 1 ]]; then
+      log_installed "$relative (reconciled managed block) (dry-run)"
+    else
+      log_installed "$relative (added managed block) (dry-run)"
+    fi
+    INSTALLED=$((INSTALLED + 1))
+    GITIGNORE_STATUS="installed"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$gitignore")"
+
+  if [[ "$has_block" == 1 ]]; then
+    # Rebuild block in place: required lines (in canonical order), then
+    # any extra user-added lines preserved as-is.
+    local tmp tmp_body
+    tmp=$(mktemp)
+    tmp_body=$(mktemp)
+    {
+      for req in "${GITIGNORE_REQUIRED_LINES[@]}"; do
+        echo "$req"
+      done
+      for extra in "${kept_extras[@]}"; do
+        echo "$extra"
+      done
+    } > "$tmp_body"
+
+    awk -v start="$GITIGNORE_BLOCK_START" -v end="$GITIGNORE_BLOCK_END" \
+        -v body_file="$tmp_body" '
+      BEGIN { skip = 0 }
+      $0 == start {
+        print start
+        while ((getline line < body_file) > 0) print line
+        close(body_file)
+        print end
+        skip = 1
+        next
+      }
+      $0 == end {
+        if (skip == 1) { skip = 0; next }
+        print
+        next
+      }
+      !skip { print }
+    ' "$gitignore" > "$tmp"
+
+    mv "$tmp" "$gitignore"
+    rm -f "$tmp_body"
+    log_installed "$relative (reconciled managed block)"
+  else
+    # No block present (file may or may not exist) — append it.
+    {
+      if [[ -f "$gitignore" && -n "$(tail -c1 "$gitignore" 2>/dev/null)" ]]; then
+        echo ""
+      fi
+      if [[ -s "$gitignore" ]]; then
+        echo ""
+      fi
+      echo "$GITIGNORE_BLOCK_START"
+      for req in "${GITIGNORE_REQUIRED_LINES[@]}"; do
+        echo "$req"
+      done
+      echo "$GITIGNORE_BLOCK_END"
+    } >> "$gitignore"
+    log_installed "$relative (added managed block)"
+  fi
+  INSTALLED=$((INSTALLED + 1))
+  GITIGNORE_STATUS="installed"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -502,6 +705,72 @@ write_managed_block() {
   echo "$END_MARKER"
 }
 
+# ---------------------------------------------------------------------------
+# Version-guide pointer block — idempotently injected into CLAUDE.md so the
+# coding agent always sees a one-line reference to the per-version Drupal
+# guide rendered by Phase 7f. The marker comment lets future setup.sh runs
+# locate and rewrite the line without duplicating.
+# ---------------------------------------------------------------------------
+VERSION_GUIDE_POINTER_MARKER="<!-- drupal-agentic-workflow: version-guide-pointer -->"
+VERSION_GUIDE_POINTER_LINE="See \`.claude/drupal-version-guide.md\` for version-specific patterns; prefer it over generic Drupal advice."
+
+ensure_version_guide_pointer() {
+  local claude_md="$TARGET_DIR/CLAUDE.md"
+  [[ -f "$claude_md" ]] || return 0
+
+  if grep -qF "$VERSION_GUIDE_POINTER_MARKER" "$claude_md"; then
+    # Marker present: extract the line directly below it and compare.
+    local current_line
+    current_line="$(awk -v m="$VERSION_GUIDE_POINTER_MARKER" '
+      $0 == m { getline nxt; print nxt; exit }
+    ' "$claude_md")"
+
+    if [[ "$current_line" == "$VERSION_GUIDE_POINTER_LINE" ]]; then
+      log_note "version-guide pointer up to date"
+      return 0
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+      log_note "would refresh version-guide pointer (dry-run)"
+      return 0
+    fi
+
+    # Rewrite the marker + the immediately following line atomically.
+    local tmp
+    tmp=$(mktemp)
+    awk -v marker="$VERSION_GUIDE_POINTER_MARKER" -v line="$VERSION_GUIDE_POINTER_LINE" '
+      $0 == marker {
+        print marker
+        print line
+        # Drop the next line (the stale pointer text).
+        getline _drop
+        next
+      }
+      { print }
+    ' "$claude_md" > "$tmp"
+    mv "$tmp" "$claude_md"
+    log_note "refreshed version-guide pointer"
+    return 0
+  fi
+
+  # Marker missing: append the pointer block to the end of the file.
+  if [[ "$DRY_RUN" == true ]]; then
+    log_note "would add version-guide pointer (dry-run)"
+    return 0
+  fi
+
+  {
+    # Ensure file ends with a newline before appending a separating blank line.
+    if [[ -n "$(tail -c1 "$claude_md")" ]]; then
+      echo ""
+    fi
+    echo ""
+    echo "$VERSION_GUIDE_POINTER_MARKER"
+    echo "$VERSION_GUIDE_POINTER_LINE"
+  } >> "$claude_md"
+  log_note "added version-guide pointer"
+}
+
 if [[ -f "$TARGET_DIR/CLAUDE.md" ]]; then
   if grep -qF "$START_MARKER" "$TARGET_DIR/CLAUDE.md"; then
     # ── New markers found: replace content between them ──────────────
@@ -585,6 +854,11 @@ else
   fi
   INSTALLED=$((INSTALLED + 1))
 fi
+
+# Inject (or refresh) the one-line pointer to the per-version Drupal guide
+# that Phase 7f renders. This extends the CLAUDE.md merge step — it must
+# stay attached to Phase 3 so the pointer exists regardless of detection.
+ensure_version_guide_pointer
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase 4 — Install .prettierrc.json (if missing)
@@ -1028,6 +1302,233 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Phase 7f — Render the version-specific Drupal guide
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 7f: Drupal version guide${RESET}"
+
+VERSION_GUIDE_DEST="$TARGET_DIR/.claude/drupal-version-guide.md"
+VERSION_GUIDE_STACK_JSON="$TARGET_DIR/.claude/stack.json"
+
+if [[ ! -f "$VERSION_GUIDE_STACK_JSON" ]]; then
+  echo "  ${GRAY}No stack.json found (detection skipped or failed) — skipping${RESET}"
+else
+  # Read backend.drupal_core; prefer jq, fall back to grep/sed (mirrors 7g).
+  VG_DRUPAL_CORE=""
+  if command -v jq &>/dev/null; then
+    VG_DRUPAL_CORE="$(jq -r '.backend.drupal_core // ""' "$VERSION_GUIDE_STACK_JSON" 2>/dev/null || echo "")"
+  else
+    VG_DRUPAL_CORE="$(grep -o '"drupal_core"[[:space:]]*:[[:space:]]*"[^"]*"' "$VERSION_GUIDE_STACK_JSON" 2>/dev/null \
+      | head -1 | sed 's/.*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "")"
+  fi
+
+  if [[ -z "$VG_DRUPAL_CORE" ]]; then
+    warn "Could not determine Drupal core version from stack.json — skipping version guide render"
+  else
+    # Derive major and minor (e.g. "10.3.5" → major=10, minor=3).
+    VG_MAJOR="${VG_DRUPAL_CORE%%.*}"
+    VG_REST="${VG_DRUPAL_CORE#*.}"
+    VG_MINOR="${VG_REST%%.*}"
+    # Guard against drupal_core values like "10" (no minor segment).
+    if [[ "$VG_MINOR" == "$VG_DRUPAL_CORE" ]]; then
+      VG_MINOR=""
+    fi
+
+    # Select template directory by major.minor when available, else fall back.
+    VG_TEMPLATE_REL=""
+    case "$VG_MAJOR" in
+      10)
+        case "$VG_MINOR" in
+          3) VG_TEMPLATE_REL="assets/knowledge/drupal/10.3/guide.md" ;;
+          4) VG_TEMPLATE_REL="assets/knowledge/drupal/10.4/guide.md" ;;
+          *)
+            VG_TEMPLATE_REL="assets/knowledge/drupal/10.4/guide.md"
+            warn "No exact match for Drupal $VG_DRUPAL_CORE — falling back to 10.4 guide"
+            ;;
+        esac
+        ;;
+      11)
+        VG_TEMPLATE_REL="assets/knowledge/drupal/11.x/guide.md"
+        ;;
+      12)
+        VG_TEMPLATE_REL="assets/knowledge/drupal/11.x/guide.md"
+        warn "No guide for Drupal $VG_DRUPAL_CORE yet — falling back to 11.x guide"
+        ;;
+      *)
+        VG_TEMPLATE_REL="assets/knowledge/drupal/11.x/guide.md"
+        warn "Unrecognized Drupal major '$VG_MAJOR' — falling back to 11.x guide"
+        ;;
+    esac
+
+    VG_TEMPLATE_SRC="$TEMPLATE_DIR/$VG_TEMPLATE_REL"
+
+    if [[ ! -f "$VG_TEMPLATE_SRC" ]]; then
+      warn "Version guide template not found at ${VG_TEMPLATE_REL} — skipping"
+    else
+      # Determine action: force re-render, fresh install, up-to-date, or refresh.
+      VG_NEEDS_WRITE=false
+      if [[ ! -f "$VERSION_GUIDE_DEST" ]]; then
+        VG_NEEDS_WRITE=true
+      elif [[ "$FORCE" == true ]]; then
+        VG_NEEDS_WRITE=true
+      elif ! cmp -s "$VG_TEMPLATE_SRC" "$VERSION_GUIDE_DEST"; then
+        VG_NEEDS_WRITE=true
+      fi
+
+      if [[ "$VG_NEEDS_WRITE" == true ]]; then
+        if [[ "$DRY_RUN" == true ]]; then
+          log_installed ".claude/drupal-version-guide.md (from ${VG_TEMPLATE_REL#assets/knowledge/drupal/}) (dry-run)"
+          INSTALLED=$((INSTALLED + 1))
+        else
+          mkdir -p "$(dirname "$VERSION_GUIDE_DEST")"
+          cp "$VG_TEMPLATE_SRC" "$VERSION_GUIDE_DEST"
+          log_installed ".claude/drupal-version-guide.md (from ${VG_TEMPLATE_REL#assets/knowledge/drupal/})"
+          INSTALLED=$((INSTALLED + 1))
+        fi
+        VERSION_GUIDE_STATUS="installed (Drupal $VG_DRUPAL_CORE)"
+      else
+        log_up_to_date ".claude/drupal-version-guide.md (Drupal $VG_DRUPAL_CORE)"
+        UP_TO_DATE=$((UP_TO_DATE + 1))
+        VERSION_GUIDE_STATUS="up-to-date (Drupal $VG_DRUPAL_CORE)"
+      fi
+    fi
+  fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 7g — Vendor the Drupal Examples module into .claude/reference/examples
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 7g: Reference: Drupal Examples module${RESET}"
+
+EXAMPLES_DIR="$TARGET_DIR/.claude/reference/examples"
+EXAMPLES_MARKER="$EXAMPLES_DIR/.fetched-for"
+REFERENCE_README="$TARGET_DIR/.claude/reference/README.md"
+STACK_JSON="$TARGET_DIR/.claude/stack.json"
+
+if ! command -v git &>/dev/null; then
+  warn "git not found on PATH — skipping examples vendor (non-fatal)"
+elif [[ ! -f "$STACK_JSON" ]]; then
+  echo "  ${GRAY}No stack.json found (detection skipped or failed) — skipping${RESET}"
+else
+  # Read backend.drupal_core; prefer jq, fall back to grep/sed.
+  DRUPAL_CORE=""
+  if command -v jq &>/dev/null; then
+    DRUPAL_CORE="$(jq -r '.backend.drupal_core // ""' "$STACK_JSON" 2>/dev/null || echo "")"
+  else
+    DRUPAL_CORE="$(grep -o '"drupal_core"[[:space:]]*:[[:space:]]*"[^"]*"' "$STACK_JSON" 2>/dev/null \
+      | head -1 | sed 's/.*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "")"
+  fi
+
+  # Extract the major version (e.g., "11.1.2" → "11", "10" → "10").
+  DRUPAL_MAJOR="${DRUPAL_CORE%%.*}"
+
+  if [[ -z "$DRUPAL_MAJOR" ]]; then
+    warn "Could not determine Drupal major from stack.json — skipping examples vendor"
+  else
+    EXAMPLES_BRANCH="$(examples_branch_for_major "$DRUPAL_MAJOR")"
+    if [[ -z "$EXAMPLES_BRANCH" ]]; then
+      warn "No Examples branch mapping for Drupal $DRUPAL_MAJOR — update examples_branch_for_major() in bin/setup.sh"
+    else
+      # Determine current fetched-for state.
+      FETCHED_MAJOR=""
+      if [[ -f "$EXAMPLES_MARKER" ]]; then
+        FETCHED_MAJOR="$(grep -o '"drupal_major"[[:space:]]*:[[:space:]]*"[^"]*"' "$EXAMPLES_MARKER" 2>/dev/null \
+          | head -1 | sed 's/.*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "")"
+      fi
+
+      NEEDS_CLONE=false
+      if [[ ! -d "$EXAMPLES_DIR" ]]; then
+        NEEDS_CLONE=true
+      elif [[ "$FORCE" == true ]]; then
+        NEEDS_CLONE=true
+      elif [[ -z "$FETCHED_MAJOR" || "$FETCHED_MAJOR" != "$DRUPAL_MAJOR" ]]; then
+        NEEDS_CLONE=true
+      fi
+
+      if [[ "$NEEDS_CLONE" == true ]]; then
+        if [[ "$DRY_RUN" == true ]]; then
+          log_installed ".claude/reference/examples (branch $EXAMPLES_BRANCH for Drupal $DRUPAL_MAJOR) (dry-run)"
+          INSTALLED=$((INSTALLED + 1))
+        else
+          # Wipe any stale checkout (different major / partial clone).
+          if [[ -d "$EXAMPLES_DIR" ]]; then
+            rm -rf "$EXAMPLES_DIR"
+          fi
+          mkdir -p "$(dirname "$EXAMPLES_DIR")"
+          echo "  Cloning Drupal Examples module (branch $EXAMPLES_BRANCH for Drupal $DRUPAL_MAJOR)..."
+          if git clone --depth=1 --branch="$EXAMPLES_BRANCH" \
+              https://git.drupalcode.org/project/examples.git "$EXAMPLES_DIR" 2>&1 | sed 's/^/    /'; then
+            FETCH_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            cat > "$EXAMPLES_MARKER" <<MARKER
+{
+  "drupal_major": "$DRUPAL_MAJOR",
+  "branch": "$EXAMPLES_BRANCH",
+  "fetch_date": "$FETCH_DATE"
+}
+MARKER
+            log_installed ".claude/reference/examples (branch $EXAMPLES_BRANCH for Drupal $DRUPAL_MAJOR)"
+            INSTALLED=$((INSTALLED + 1))
+            EXAMPLES_STATUS="installed (branch $EXAMPLES_BRANCH, Drupal $DRUPAL_MAJOR)"
+          else
+            warn "git clone of Drupal Examples module failed — skipping"
+            EXAMPLES_STATUS="failed (git clone error)"
+          fi
+        fi
+        [[ "$DRY_RUN" == true ]] && EXAMPLES_STATUS="installed (branch $EXAMPLES_BRANCH, Drupal $DRUPAL_MAJOR)"
+      else
+        log_up_to_date ".claude/reference/examples (Drupal $DRUPAL_MAJOR, branch $EXAMPLES_BRANCH)"
+        UP_TO_DATE=$((UP_TO_DATE + 1))
+        EXAMPLES_STATUS="up-to-date (branch $EXAMPLES_BRANCH, Drupal $DRUPAL_MAJOR)"
+      fi
+
+      # Install reference README once (idempotent).
+      if [[ -f "$REFERENCE_README" ]]; then
+        log_up_to_date ".claude/reference/README.md"
+        UP_TO_DATE=$((UP_TO_DATE + 1))
+      else
+        if [[ "$DRY_RUN" == true ]]; then
+          log_installed ".claude/reference/README.md (dry-run)"
+          INSTALLED=$((INSTALLED + 1))
+        else
+          mkdir -p "$(dirname "$REFERENCE_README")"
+          cat > "$REFERENCE_README" <<'REFREADME'
+# .claude/reference/
+
+Read-only canonical Drupal patterns vendored for the coding agent.
+
+## Rules
+
+- **Read-only**: never modify files under this directory by hand.
+- **Never enable**: these modules are reference material only — do not
+  install or enable them in the Drupal site.
+- **Never copy verbatim**: study the patterns and adapt them to the
+  project's own conventions (`.claude/conventions.md`) and naming.
+- **Refreshed by setup.sh**: re-running `bin/setup.sh` re-clones these
+  when the Drupal major changes. Use `--force` to force a refresh.
+
+## Note
+
+This directory is gitignored. It exists only on local checkouts after
+running setup.sh, not in the repository.
+REFREADME
+          log_installed ".claude/reference/README.md"
+          INSTALLED=$((INSTALLED + 1))
+        fi
+      fi
+    fi
+  fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 7h — Patch project .gitignore with a managed block
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 7h: .gitignore managed block${RESET}"
+
+update_gitignore_managed_block "$TARGET_DIR/.gitignore"
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Phase 7b — Write recommended-skills doc from detector output
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
@@ -1250,8 +1751,39 @@ echo "  ${GREEN}Installed${RESET} : ${INSTALLED} files"
 echo "  ${GRAY}Up to date${RESET}: ${UP_TO_DATE} files"
 echo "  ${YELLOW}Skipped${RESET}   : ${SKIPPED} files (customized, not overwritten)"
 echo ""
+echo "  ${BOLD}Version-aware artifacts${RESET}"
+echo "    Version guide   : ${VERSION_GUIDE_STATUS}"
+echo "    Examples checkout: ${EXAMPLES_STATUS}"
+echo "    gitignore block : ${GITIGNORE_STATUS}"
+echo ""
 echo "══════════════════════════════════════════════"
 echo ""
+
+# ---------------------------------------------------------------------------
+# Notice: AI_CONTEXT.md files already tracked by git
+#
+# These should be gitignored (see Phase 7h). We never run git mutations
+# automatically — print the exact command the user can run themselves.
+# ---------------------------------------------------------------------------
+if command -v git &>/dev/null && [[ -d "$TARGET_DIR/.git" ]]; then
+  TRACKED_AI_CONTEXT="$( (cd "$TARGET_DIR" && git ls-files web/modules/custom/*/AI_CONTEXT.md 2>/dev/null) || true )"
+  if [[ -n "$TRACKED_AI_CONTEXT" ]]; then
+    echo "  ${YELLOW}⚠ AI_CONTEXT.md files are already tracked by git${RESET}"
+    echo "    These are intended to be gitignored (the managed block in"
+    echo "    .gitignore was just added/updated). Untrack them with:"
+    echo ""
+    # Build a single-line command listing all files.
+    UNTRACK_ARGS=""
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      UNTRACK_ARGS+=" $f"
+    done <<< "$TRACKED_AI_CONTEXT"
+    echo "      git rm --cached${UNTRACK_ARGS}"
+    echo ""
+    echo "    (drupal-agentic-workflow does not run git mutations for you.)"
+    echo ""
+  fi
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase 9 — Interactive follow-ups (optionally launch claude per task)
