@@ -9,7 +9,6 @@
 #   --skip-tools       Skip code quality tools detection/installation
 #   --skip-ai-context  Skip AI_CONTEXT.md generation prompt
 #   --skip-detect      Skip stack detection / skill gap analysis
-  --skip-followups   Skip the interactive "open claude for X" prompts at the end
 #   --skip-followups   Skip the interactive "open claude for X" prompts at the end
 #   --help             Show this help message
 #
@@ -196,6 +195,13 @@ log_up_to_date() {
 
 log_skipped() {
   echo "  ${YELLOW}⊘ SKIPPED (customized):${RESET} $1"
+}
+
+# Sub-bullet note — used for secondary edits to a file already counted in
+# INSTALLED/UP_TO_DATE this run (e.g., the version-guide pointer appended
+# alongside the main CLAUDE.md merge). Does not affect counters.
+log_note() {
+  echo "    ${GRAY}↳${RESET} $1"
 }
 
 # ---------------------------------------------------------------------------
@@ -720,14 +726,12 @@ ensure_version_guide_pointer() {
     ' "$claude_md")"
 
     if [[ "$current_line" == "$VERSION_GUIDE_POINTER_LINE" ]]; then
-      log_up_to_date "CLAUDE.md (version-guide pointer)"
-      UP_TO_DATE=$((UP_TO_DATE + 1))
+      log_note "version-guide pointer up to date"
       return 0
     fi
 
     if [[ "$DRY_RUN" == true ]]; then
-      log_installed "CLAUDE.md (refreshed version-guide pointer) (dry-run)"
-      INSTALLED=$((INSTALLED + 1))
+      log_note "would refresh version-guide pointer (dry-run)"
       return 0
     fi
 
@@ -745,15 +749,13 @@ ensure_version_guide_pointer() {
       { print }
     ' "$claude_md" > "$tmp"
     mv "$tmp" "$claude_md"
-    log_installed "CLAUDE.md (refreshed version-guide pointer)"
-    INSTALLED=$((INSTALLED + 1))
+    log_note "refreshed version-guide pointer"
     return 0
   fi
 
   # Marker missing: append the pointer block to the end of the file.
   if [[ "$DRY_RUN" == true ]]; then
-    log_installed "CLAUDE.md (added version-guide pointer) (dry-run)"
-    INSTALLED=$((INSTALLED + 1))
+    log_note "would add version-guide pointer (dry-run)"
     return 0
   fi
 
@@ -766,8 +768,7 @@ ensure_version_guide_pointer() {
     echo "$VERSION_GUIDE_POINTER_MARKER"
     echo "$VERSION_GUIDE_POINTER_LINE"
   } >> "$claude_md"
-  log_installed "CLAUDE.md (added version-guide pointer)"
-  INSTALLED=$((INSTALLED + 1))
+  log_note "added version-guide pointer"
 }
 
 if [[ -f "$TARGET_DIR/CLAUDE.md" ]]; then
