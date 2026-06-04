@@ -1,6 +1,6 @@
 # Drupal Agentic Workflow for Claude Code
 
-> Turn Claude Code into a Drupal-native development partner: specialized skills, auto-generated project context, code quality hooks, and security scanning.
+> Turn agentic coding agent into a Drupal-native development partner: specialized skills, auto-generated project context, code quality hooks, and security scanning.
 
 ## Why Use This?
 
