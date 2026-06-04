@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint & test the tooling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # shellcheck is preinstalled on GitHub's ubuntu runners; verify it's there
+      # so the runner fails loudly rather than silently skipping the stage.
+      - name: Verify shellcheck is available
+        run: shellcheck --version
+
+      - name: Run test suite (bash -n, shellcheck, node --test, smoke)
+        run: bash tests/run.sh

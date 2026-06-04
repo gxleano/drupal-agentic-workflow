@@ -1,0 +1,34 @@
+{
+  "name": "gxleano/drupal-agentic-workflow",
+  "description": "Turn Claude Code and other AGENTS.md-aware agents into a Drupal-expert development partner: skills, safety/quality hooks, and ground-truth project-context generation.",
+  "type": "library",
+  "license": "GPL-2.0-or-later",
+  "keywords": [
+    "drupal",
+    "ai",
+    "claude",
+    "agents",
+    "code-quality",
+    "developer-tools",
+    "agentic"
+  ],
+  "homepage": "https://github.com/gxleano/drupal-agentic-workflow",
+  "authors": [
+    {
+      "name": "David Galeano",
+      "email": "david.galeano@factorial.io"
+    }
+  ],
+  "bin": [
+    "bin/daw"
+  ],
+  "scripts": {
+    "test": "tests/run.sh"
+  },
+  "scripts-descriptions": {
+    "test": "Run the drupal-agentic-workflow tool test suite (shellcheck + node + smoke)."
+  },
+  "config": {
+    "sort-packages": true
+  }
+}
