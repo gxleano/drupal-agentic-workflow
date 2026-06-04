@@ -18,6 +18,9 @@ fi
 # ── Resolve project root ────────────────────────────────────────────────────
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 
+# Shared PHP tool resolution (DDEV → vendor/bin → $PATH → global Composer).
+source "$(dirname "$0")/lib/php-tools.sh"
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 ERRORS=0
 TOOLS_RUN=()
@@ -160,36 +163,33 @@ if is_backend; then
   REL_PATH="${FILE_PATH#"$PROJECT_DIR"/}"
 
   # --- Resolve the phpcs/phpcbf runner ---------------------------------------
-  # Prefer ddev (matches the project's containerised toolchain and CI), but
-  # fall back to a vendored binary so the hook still works when ddev isn't the
-  # toolchain. If neither is available we skip the CS step loudly below.
-  PHP_RUNNER=""
-  PHPCS_BIN=""
-  PHPCBF_BIN=""
+  # Resolution order (see lib/php-tools.sh): ddev (matches the project's
+  # containerised toolchain and CI) → the repo's own vendor/bin → a phpcs on
+  # $PATH → a global Composer install. The $PATH / global fallbacks let the
+  # hook lint a standalone contrib module repo that has no Drupal/DDEV.
   PHPCS_AVAILABLE=true
+  PHPCS_RUNNER=""; PHPCS_BIN=""
+  PHPCBF_AVAILABLE=false
+  PHPCBF_RUNNER=""; PHPCBF_BIN=""
   PHPCBF_FIXED=false
 
-  if command -v ddev &>/dev/null && [[ -f "$PROJECT_DIR/.ddev/config.yaml" ]]; then
-    PHP_RUNNER="ddev exec"
-    PHPCS_BIN="phpcs"
-    PHPCBF_BIN="phpcbf"
-  elif [[ -x "$PROJECT_DIR/vendor/bin/phpcs" ]]; then
-    PHPCS_BIN="$PROJECT_DIR/vendor/bin/phpcs"
-    PHPCBF_BIN="$PROJECT_DIR/vendor/bin/phpcbf"
+  if php_resolve_tool "$PROJECT_DIR" phpcs; then
+    PHPCS_RUNNER="$PHP_TOOL_RUNNER"; PHPCS_BIN="$PHP_TOOL_BIN"
+    echo "  phpcs runner  : $PHP_TOOL_SOURCE" >&2
   else
     PHPCS_AVAILABLE=false
-    echo "  Skipping phpcbf/phpcs: no ddev project and no vendor/bin/phpcs found." >&2
+    echo "  Skipping phpcbf/phpcs: no ddev project and no local phpcs found" >&2
+    echo "  (looked in vendor/bin, \$PATH and the global Composer bin dir)." >&2
     echo "  Install Coder so the hook can lint:" >&2
     echo "    composer require --dev drupal/coder" >&2
   fi
 
-  # Run a phpcs-family binary from the project root via the resolved runner.
-  # Usage: run_phpcs_tool <bin> [args...]
-  run_phpcs_tool() {
-    local bin="$1"; shift
-    # shellcheck disable=SC2086  # $PHP_RUNNER ("ddev exec") must word-split.
-    ( cd "$PROJECT_DIR" && $PHP_RUNNER "$bin" "$@" )
-  }
+  # phpcbf (auto-fix) is resolved independently — it lives alongside phpcs in
+  # every install, but we degrade gracefully to phpcs-only if it's missing.
+  if php_resolve_tool "$PROJECT_DIR" phpcbf; then
+    PHPCBF_RUNNER="$PHP_TOOL_RUNNER"; PHPCBF_BIN="$PHP_TOOL_BIN"
+    PHPCBF_AVAILABLE=true
+  fi
 
   # --- Resolve the coding standard -------------------------------------------
   # Prefer the project's own ruleset so the hook agrees with CI exactly (it can
@@ -202,8 +202,8 @@ if is_backend; then
   elif [[ -f "$PROJECT_DIR/phpcs.xml.dist" ]]; then
     CS_ARGS=(--standard=phpcs.xml.dist)
   else
-    CS_ARGS=(--standard=Drupal,DrupalPractice
-             --extensions=php,module,inc,install,test,profile,theme)
+    CS_ARGS=("--standard=Drupal,DrupalPractice"
+             "--extensions=php,module,inc,install,test,profile,theme")
   fi
 
   # Detect a broken Coder install (missing standard / missing binary) in tool
@@ -212,15 +212,23 @@ if is_backend; then
     grep -qiE 'coding standard .* is not installed|ERROR: the .* standard|command not found|executable file not found' <<< "$1"
   }
 
-  if [[ "$PHPCS_AVAILABLE" == true ]]; then
+  if [[ "$PHPCS_AVAILABLE" == true && "$PHPCBF_AVAILABLE" == true ]]; then
     # --- PHPCBF (auto-fix) ---
     log_tool_start "phpcbf"
     TOOLS_RUN+=("phpcbf")
     PHPCBF_OUTPUT=""
     PHPCBF_EXIT=0
-    PHPCBF_OUTPUT=$(run_phpcs_tool "$PHPCBF_BIN" "${CS_ARGS[@]}" "$REL_PATH" 2>&1) || PHPCBF_EXIT=$?
+    PHPCBF_OUTPUT=$(php_exec_tool "$PROJECT_DIR" "$PHPCBF_RUNNER" "$PHPCBF_BIN" "${CS_ARGS[@]}" "$REL_PATH" 2>&1) || PHPCBF_EXIT=$?
 
-    if is_setup_failure "$PHPCBF_OUTPUT"; then
+    if [[ "$PHPCBF_EXIT" -eq 127 ]]; then
+      # The resolved binary isn't actually runnable here — e.g. a global phpcbf
+      # shim that expects a project-local install. Skip the whole CS step
+      # non-blockingly (matches the "no tool found" behaviour), don't block.
+      echo "  phpcbf resolved to a non-runnable binary ($PHPCBF_BIN) — skipping phpcs/phpcbf." >&2
+      echo "  Install a working CodeSniffer for this repo:" >&2
+      echo "    composer require --dev drupal/coder" >&2
+      PHPCS_AVAILABLE=false
+    elif is_setup_failure "$PHPCBF_OUTPUT"; then
       echo "  phpcbf could not run — Coder standards not installed correctly:" >&2
       echo "$PHPCBF_OUTPUT" >&2
       echo "  Fix: composer require --dev drupal/coder && \\" >&2
@@ -241,9 +249,17 @@ if is_backend; then
     TOOLS_RUN+=("phpcs")
     PHPCS_OUTPUT=""
     PHPCS_EXIT=0
-    PHPCS_OUTPUT=$(run_phpcs_tool "$PHPCS_BIN" -s "${CS_ARGS[@]}" "$REL_PATH" 2>&1) || PHPCS_EXIT=$?
+    PHPCS_OUTPUT=$(php_exec_tool "$PROJECT_DIR" "$PHPCS_RUNNER" "$PHPCS_BIN" -s "${CS_ARGS[@]}" "$REL_PATH" 2>&1) || PHPCS_EXIT=$?
 
-    if [[ "$PHPCS_EXIT" -ne 0 ]]; then
+    if [[ "$PHPCS_EXIT" -eq 127 ]] || is_setup_failure "$PHPCS_OUTPUT"; then
+      # Resolved phpcs is not functional (non-runnable shim or broken Coder
+      # standard). Report it as a setup problem and skip — don't block on a
+      # phantom code error.
+      echo "  phpcs could not run — the resolved binary is not functional:" >&2
+      echo "$PHPCS_OUTPUT" >&2
+      echo "  Install a working CodeSniffer for this repo:" >&2
+      echo "    composer require --dev drupal/coder" >&2
+    elif [[ "$PHPCS_EXIT" -ne 0 ]]; then
       echo "$PHPCS_OUTPUT" >&2
       # phpcbf rewrote the file on disk; Claude's in-context copy is now stale.
       # The violations above survived auto-fix (no fixer) and need manual edits.

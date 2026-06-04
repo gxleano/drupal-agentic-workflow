@@ -98,8 +98,9 @@ File modified by Claude
 #### Standard & runner resolution
 
 - **Standard**: prefers the project's own ruleset (`phpcs.xml`, then `phpcs.xml.dist`) so the hook agrees with CI exactly; falls back to the bundled `Drupal,DrupalPractice` (with the default extension list) when no ruleset is present.
-- **Runner**: prefers `ddev exec` when a `.ddev/config.yaml` exists; falls back to `vendor/bin/phpcs`/`phpcbf` when ddev isn't the toolchain. If neither is available, the PHP CS step is skipped with a one-line install hint instead of failing silently.
+- **Runner**: resolved by the shared `lib/php-tools.sh` in this order — `ddev exec` (when `.ddev/config.yaml` exists **and** DDEV is running) → the repo's own `vendor/bin/phpcs`/`phpcbf` → a `phpcs`/`phpcbf` on `$PATH` → a global Composer install (`~/.composer` / `~/.config/composer`). The `$PATH` and global fallbacks let the hook lint a **standalone contrib module/theme repo that has no Drupal installation or DDEV**. If none is found, the PHP CS step is skipped with a one-line install hint instead of failing silently.
 - **Broken Coder install** (missing standard / binary) is detected in tool output and reported as a setup problem with the `composer require --dev drupal/coder` + `--config-set installed_paths` fix, rather than masquerading as a code error.
+- **Non-runnable binary** (exit 127 — e.g. a global `phpcs` shim that expects a project-local install) is treated as "no tool available": the CS step is skipped non-blockingly with an install hint, never reported as a code error.
 - **security-perf-scan** — Fast local grep for dangerous patterns:
   - Security: `eval()`, `shell_exec()`, `passthru()`, `proc_open()`, `popen()`, `$_GET/$_POST/$_REQUEST`, `unserialize()`, `extract()`
   - Performance: `\Drupal::` in `src/`, missing `accessCheck()` on entity queries
@@ -133,35 +134,47 @@ npm install --save-dev prettier-plugin-twig-melody  # optional
 **Timeout**: 120 seconds
 **Exit code**: Always 0 (informational — output shown to user, not fed back to Claude)
 
-Runs PHPStan once after Claude finishes each turn, analysing only PHP files changed in `web/modules/custom/` since the last commit. This avoids per-file overhead and runs PHPStan when its result cache is already warm from the session's edits.
+Runs PHPStan once after Claude finishes each turn, analysing the PHP files changed since the last commit. This avoids per-file overhead and runs PHPStan when its result cache is already warm from the session's edits.
+
+The hook adapts to two contexts (detected by the shared `lib/php-tools.sh`):
+
+- **Drupal site** (a docroot with core checked out): scans changed files under `web/modules/custom/` — the original behaviour.
+- **Standalone repo** (a contrib module/theme/profile with an `*.info.yml` at the root, or a `drupal-module`/`-theme`/`-profile` composer.json, and **no Drupal installation**): scans changed PHP anywhere in the repo, still excluding vendored/contrib/core paths.
+
+The phpstan binary is resolved with the same order as phpcs: `ddev exec` → `vendor/bin/phpstan` → `$PATH` → global Composer — so it runs locally when there's no container.
 
 ### Execution Flow
 
 ```
 Claude finishes turn
-  └─ DDEV running? (skip if not)
-      └─ phpstan.neon exists? (skip if not)
-          └─ Any changed .php/.module/.theme/etc in web/modules/custom/?
-              └─ ddev exec phpstan analyse --no-progress <changed files>
-                  ├─ PASSED → brief confirmation
-                  └─ FAILED → issue list + tip to ask Claude to fix
+  └─ phpstan resolvable? (ddev / vendor-bin / PATH / global — skip if not)
+      └─ context = site | module
+          └─ config: phpstan.neon(.dist) → use it
+                     else (local run) → synthesize a config (level 1):
+                         • phpstan-drupal found → include its extension.neon
+                         • not found            → barebones phpstan
+                     else (ddev, no config)  → skip
+              └─ Any changed PHP? (site: web/modules/custom/ only)
+                  └─ phpstan analyse --no-progress <changed files>
+                      ├─ PASSED → brief confirmation
+                      └─ FAILED → issue list + tip to ask Claude to fix
 ```
 
 ### Skipped When
 
-- DDEV is not running
-- `phpstan.neon` does not exist in the project root
-- No changed PHP files in `web/modules/custom/`
+- No phpstan binary is resolvable in any of: DDEV, `vendor/bin`, `$PATH`, global Composer
+- Running via DDEV with no project `phpstan.neon`/`.dist` (host paths can't be synthesized into the container)
+- No changed PHP files in scope for the detected context
 
 ### Output
 
-Results appear as a notification after Claude's response. If issues are found, ask Claude to fix them in the next turn.
+Results appear as a notification after Claude's response, including the detected context, runner, and which config was used. If issues are found, ask Claude to fix them in the next turn.
 
 ### Requirements
 
-- `phpstan/phpstan` and `mglaman/phpstan-drupal` installed via Composer
-- `phpstan.neon` in the project root (generated by `setup.sh`)
-- DDEV running (`ddev start`)
+- `phpstan/phpstan` (and, for Drupal-aware analysis, `mglaman/phpstan-drupal`) reachable via DDEV, `vendor/bin`, `$PATH`, or a global Composer install
+- For containerised runs: `phpstan.neon` in the project root (generated by `setup.sh`) and DDEV running (`ddev start`)
+- For standalone module repos: a local phpstan install; a `phpstan.neon`/`.dist` is preferred but not required (a level-1 config is synthesized when absent)
 
 ## Prompt Context (`prompt-context.sh`) — Opt-in
 
@@ -199,7 +212,7 @@ This hook is **opt-in**. Add to `.claude/settings.local.json` (NOT `settings.jso
 ## Requirements
 
 - `jq` — required by all hooks for JSON parsing
-- `ddev` — required for PHP linting (phpcs/phpcbf run inside DDEV)
+- A PHP linting toolchain reachable via **one of**: `ddev`, the repo's `vendor/bin`, `$PATH`, or a global Composer install. DDEV is no longer required — a standalone contrib module repo with a local `phpcs`/`phpstan` works too.
 - `npx` — for frontend tools (optional, skipped if unavailable)
 - `prettier` — optional, for formatting (skipped if not installed)
 - `git` — required by prompt-context.sh

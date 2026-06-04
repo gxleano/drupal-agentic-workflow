@@ -83,6 +83,7 @@ If the user says something like "scaffold a block" or "create a new service", ma
 - Human-readable name
 - Description
 - Any dependencies (contrib or core modules)
+- Whether to ship module-root quality configs (`phpcs.xml.dist`, `phpstan.neon.dist`, `.prettierrc.json`) — default **yes** for a contrib module or standalone repo, **optional** when it lives inside a site that already has project-root configs (see "Quality tooling configs" below)
 
 **Generate these files in `web/modules/custom/{module_name}/`:**
 
@@ -148,6 +149,98 @@ services:
 
 ## Data Flow
 (To be documented as the module grows)
+```
+
+#### Quality tooling configs (module root) — recommended for contrib
+
+Following the drupal.org `.dist` convention, ship these at the module root so the
+module is **self-contained**: a contributor (or CI, or the project's own
+post-generation lint / post-session PHPStan hooks running against a standalone
+checkout) can lint and analyse it without any site-level configuration. They are
+committed defaults — a developer can copy them to `phpcs.xml` / `phpstan.neon`
+locally to override without touching the tracked files.
+
+Skip these when the module will only ever live inside a site that already
+provides project-root `phpcs.xml.dist` / `phpstan.neon` (the hooks fall back to
+the site config or the bundled `Drupal,DrupalPractice` standard there).
+
+#### `phpcs.xml.dist`
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<ruleset name="{module_name}">
+  <description>PHP CodeSniffer configuration for the {Human Name} module.</description>
+
+  <!-- Scan the module itself; run phpcs/phpcbf with no path argument. -->
+  <file>.</file>
+  <exclude-pattern>*/vendor/*</exclude-pattern>
+  <exclude-pattern>*/node_modules/*</exclude-pattern>
+
+  <arg name="extensions" value="php,module,inc,install,test,profile,theme,css,info,txt,md,yml"/>
+  <arg name="report" value="full"/>
+  <!-- s = show sniff codes (actionable), p = show progress. -->
+  <arg value="sp"/>
+  <arg name="colors"/>
+
+  <rule ref="Drupal"/>
+  <rule ref="DrupalPractice"/>
+</ruleset>
+```
+
+#### `phpstan.neon.dist`
+```neon
+# PHPStan configuration for the {Human Name} module.
+#
+# Dev dependencies (or provided by the surrounding site / drupal.org CI):
+#   composer require --dev phpstan/phpstan phpstan/extension-installer mglaman/phpstan-drupal
+#
+# With phpstan/extension-installer, phpstan-drupal auto-registers — no `includes`
+# needed. Without it, uncomment the includes block below.
+#
+# includes:
+#     - vendor/mglaman/phpstan-drupal/extension.neon
+#     - vendor/mglaman/phpstan-drupal/rules.neon
+parameters:
+    level: 1
+    paths:
+        - .
+    excludePaths:
+        - vendor/*
+        - node_modules/*
+```
+
+#### `.prettierrc.json`
+```json
+{
+  "singleQuote": true,
+  "printWidth": 80,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": true,
+  "trailingComma": "all",
+  "bracketSpacing": true,
+  "arrowParens": "always",
+  "endOfLine": "lf",
+  "overrides": [
+    {
+      "files": ["*.yaml", "*.yml"],
+      "options": {
+        "singleQuote": false
+      }
+    },
+    {
+      "files": ["*.twig", "*.html.twig"],
+      "options": {
+        "printWidth": 120
+      }
+    },
+    {
+      "files": "*.json",
+      "options": {
+        "tabWidth": 2
+      }
+    }
+  ]
+}
 ```
 
 **After generation:** Enable the module:
@@ -678,14 +771,23 @@ Same approach as content entity but use `ddev drush generate entity:configuratio
 
 ## 4. Post-Generation Checklist
 
-**After generating ANY scaffold, always run:**
+**After generating ANY scaffold, always run** phpcbf then phpcs.
+
+- **Runner**: prefer `ddev exec` when DDEV is running; otherwise use a local
+  binary (`vendor/bin/phpcs` → a `phpcs` on `$PATH`). This mirrors the lint hook
+  (`.claude/hooks/lib/php-tools.sh`) so a standalone contrib checkout with no
+  DDEV still works.
+- **Standard**: if the module ships a `phpcs.xml.dist` / `phpcs.xml`, run from the
+  module directory with `--standard=phpcs.xml.dist` so it matches CI; otherwise
+  fall back to the bundled `Drupal,DrupalPractice` standard.
 
 ```bash
-# 1. Auto-fix coding standards
+# Inside a site with DDEV — module has no own ruleset:
 ddev exec phpcbf --standard=Drupal,DrupalPractice --extensions=php,module,inc,install,test,profile,theme web/modules/custom/{module_name}
+ddev exec phpcs  --standard=Drupal,DrupalPractice --extensions=php,module,inc,install,test,profile,theme web/modules/custom/{module_name}
 
-# 2. Verify no remaining violations
-ddev exec phpcs --standard=Drupal,DrupalPractice --extensions=php,module,inc,install,test,profile,theme web/modules/custom/{module_name}
+# Standalone module repo that ships phpcs.xml.dist (no DDEV) — run from its root:
+( cd web/modules/custom/{module_name} && vendor/bin/phpcbf --standard=phpcs.xml.dist && vendor/bin/phpcs --standard=phpcs.xml.dist )
 ```
 
 **Then suggest these follow-up actions:**
