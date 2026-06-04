@@ -43,7 +43,17 @@ fi
 
 stage "node --test"
 if command -v node &>/dev/null; then
-  node --test 'tests/*.test.mjs' || fail "node --test"
+  # Expand the glob in bash (not in node) so this works regardless of Node
+  # version — node's own `--test` glob support only landed in Node 21+.
+  TEST_FILES=()
+  for f in tests/*.test.mjs; do
+    [[ -f "$f" ]] && TEST_FILES+=("$f")
+  done
+  if [[ "${#TEST_FILES[@]}" -gt 0 ]]; then
+    node --test "${TEST_FILES[@]}" || fail "node --test"
+  else
+    echo "  (no *.test.mjs files — skipped)"
+  fi
 else
   echo "  (node not installed — skipped)"
 fi
