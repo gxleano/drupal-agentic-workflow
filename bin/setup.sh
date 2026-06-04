@@ -25,6 +25,10 @@
 #   7c. Scan custom code for convention adoption; write .claude/conventions.md
 #   7d. Scaffold knowledge files (ADRs, glossary, external systems, fixtures)
 #   7e. Build project-map.md from Drupal config + custom module YAMLs
+#   7f. Render version-aware Drupal guide → .claude/drupal-version-guide.md
+#   7g. Vendor matching Examples module checkout → .claude/reference/examples/
+#   7h. Maintain managed .gitignore block
+#   7i. Build live site-API index (Drush) → .claude/site-api.json
 #   8. Print summary with counts and next steps
 #   9. Offer interactive `claude` follow-ups for CLAUDE.md / AI_CONTEXT polish
 #
@@ -66,10 +70,12 @@ UP_TO_DATE=0
 SKIPPED=0
 
 # Per-artifact status flags consumed by the Phase 8 summary. Set by Phase 7f
-# (version guide), 7g (Examples checkout), and 7h (gitignore managed block).
+# (version guide), 7g (Examples checkout), 7h (gitignore managed block), and
+# 7i (live site-API index).
 VERSION_GUIDE_STATUS="skipped"
 EXAMPLES_STATUS="skipped"
 GITIGNORE_STATUS="skipped"
+SITE_API_STATUS="skipped"
 
 # ---------------------------------------------------------------------------
 # Flags / defaults
@@ -116,6 +122,10 @@ Phases:
   7c. Scan custom code for convention adoption; write .claude/conventions.md
   7d. Scaffold knowledge files (ADRs, glossary, external systems, fixtures)
   7e. Build project-map.md (content types, roles, routes, services, splits)
+  7f. Render version-aware Drupal guide (.claude/drupal-version-guide.md)
+  7g. Vendor matching Examples checkout (.claude/reference/examples/)
+  7h. Maintain managed .gitignore block
+  7i. Build live site-API index via Drush (.claude/site-api.json)
   8. Print summary with counts and next steps
 HELP
 }
@@ -219,6 +229,14 @@ install_file() {
     if diff -q "$src" "$dest" &>/dev/null; then
       log_up_to_date "$relative_dest"
       UP_TO_DATE=$((UP_TO_DATE + 1))
+    elif [[ "$FORCE" == true ]]; then
+      if [[ "$DRY_RUN" == true ]]; then
+        log_installed "$relative_dest (forced, dry-run)"
+      else
+        cp "$src" "$dest"
+        log_installed "$relative_dest (forced)"
+      fi
+      INSTALLED=$((INSTALLED + 1))
     else
       log_skipped "$relative_dest"
       SKIPPED=$((SKIPPED + 1))
@@ -249,6 +267,15 @@ install_file_executable() {
     if diff -q "$src" "$dest" &>/dev/null; then
       log_up_to_date "$relative_dest"
       UP_TO_DATE=$((UP_TO_DATE + 1))
+    elif [[ "$FORCE" == true ]]; then
+      if [[ "$DRY_RUN" == true ]]; then
+        log_installed "$relative_dest (forced, dry-run)"
+      else
+        cp "$src" "$dest"
+        chmod +x "$dest"
+        log_installed "$relative_dest (forced)"
+      fi
+      INSTALLED=$((INSTALLED + 1))
     else
       log_skipped "$relative_dest"
       SKIPPED=$((SKIPPED + 1))
@@ -279,6 +306,10 @@ install_file_executable() {
 # ---------------------------------------------------------------------------
 examples_branch_for_major() {
   local major="$1"
+  # Strip any Composer constraint operator / non-digits ("^11.0" → "11") so
+  # the mapping is robust whether the caller passes a clean major or a raw
+  # constraint string.
+  major="${major//[^0-9]/}"
   case "$major" in
     10) echo "4.0.x" ;;
     11) echo "4.0.x" ;;
@@ -317,6 +348,7 @@ GITIGNORE_BLOCK_END="# <<< drupal-agentic-workflow <<<"
 GITIGNORE_REQUIRED_LINES=(
   "web/modules/custom/**/AI_CONTEXT.md"
   ".claude/reference/"
+  ".claude/site-api.json"
 )
 
 update_gitignore_managed_block() {
@@ -1411,17 +1443,27 @@ if ! command -v git &>/dev/null; then
 elif [[ ! -f "$STACK_JSON" ]]; then
   echo "  ${GRAY}No stack.json found (detection skipped or failed) — skipping${RESET}"
 else
-  # Read backend.drupal_core; prefer jq, fall back to grep/sed.
+  # Prefer the normalized backend.drupal_major emitted by detect.mjs; fall
+  # back to backend.drupal_core for stack.json files written before that
+  # field existed. Prefer jq, fall back to grep/sed.
+  DRUPAL_MAJOR=""
   DRUPAL_CORE=""
   if command -v jq &>/dev/null; then
+    DRUPAL_MAJOR="$(jq -r '.backend.drupal_major // ""' "$STACK_JSON" 2>/dev/null || echo "")"
     DRUPAL_CORE="$(jq -r '.backend.drupal_core // ""' "$STACK_JSON" 2>/dev/null || echo "")"
   else
+    DRUPAL_MAJOR="$(grep -o '"drupal_major"[[:space:]]*:[[:space:]]*[0-9]*' "$STACK_JSON" 2>/dev/null \
+      | head -1 | sed 's/.*:[[:space:]]*\([0-9]*\).*/\1/' || echo "")"
     DRUPAL_CORE="$(grep -o '"drupal_core"[[:space:]]*:[[:space:]]*"[^"]*"' "$STACK_JSON" 2>/dev/null \
       | head -1 | sed 's/.*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "")"
   fi
 
-  # Extract the major version (e.g., "11.1.2" → "11", "10" → "10").
-  DRUPAL_MAJOR="${DRUPAL_CORE%%.*}"
+  # Fall back to parsing drupal_core, sanitizing to digits only so constraint
+  # strings like "^11.0" or "~10.3" still yield a clean major ("11"/"10").
+  if [[ -z "$DRUPAL_MAJOR" || "$DRUPAL_MAJOR" == "null" ]]; then
+    DRUPAL_MAJOR="${DRUPAL_CORE%%.*}"
+    DRUPAL_MAJOR="${DRUPAL_MAJOR//[^0-9]/}"
+  fi
 
   if [[ -z "$DRUPAL_MAJOR" ]]; then
     warn "Could not determine Drupal major from stack.json — skipping examples vendor"
@@ -1737,6 +1779,61 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Phase 7i — Live site-API index (.claude/site-api.json)
+#
+# High-fidelity ground truth from the RUNNING site (valid service IDs, real
+# entity/bundle/field machine names, routes, permissions, modules) so the agent
+# verifies identifiers before generating code. Requires a bootable site via
+# Drush; when unavailable, project-map.md (Phase 7e) stays the static fallback.
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 7i: Site-API index${RESET}"
+
+SITE_API_PHP_SRC="$TEMPLATE_DIR/assets/tools/site-api.php"
+SITE_API_SH_SRC="$TEMPLATE_DIR/assets/tools/site-api.sh"
+SITE_API_PHP_DEST="$TARGET_DIR/.claude/tools/site-api.php"
+SITE_API_SH_DEST="$TARGET_DIR/.claude/tools/site-api.sh"
+
+# Resolve a Drush runner the same way the lint hook resolves phpcs.
+SITE_API_DRUSH=""
+if command -v ddev &>/dev/null && [[ -f "$TARGET_DIR/.ddev/config.yaml" ]]; then
+  SITE_API_DRUSH="ddev drush"
+elif [[ -x "$TARGET_DIR/vendor/bin/drush" ]]; then
+  SITE_API_DRUSH="$TARGET_DIR/vendor/bin/drush"
+elif command -v drush &>/dev/null; then
+  SITE_API_DRUSH="drush"
+fi
+
+if [[ "$SKIP_DETECT" == true ]]; then
+  echo "  ${YELLOW}--skip-detect: skipping site-API index${RESET}"
+elif [[ ! -f "$SITE_API_PHP_SRC" || ! -f "$SITE_API_SH_SRC" ]]; then
+  echo "  ${YELLOW}⚠ site-api tools not found in template${RESET}"
+elif [[ -z "$SITE_API_DRUSH" ]]; then
+  # Still install the tools so the user can run them once the site is up.
+  install_file "$SITE_API_PHP_SRC" "$SITE_API_PHP_DEST"
+  install_file_executable "$SITE_API_SH_SRC" "$SITE_API_SH_DEST"
+  warn "No Drush runner (ddev / vendor/bin/drush / global) — skipping site-api.json"
+  echo "  ${GRAY}project-map.md remains the static fallback; run .claude/tools/site-api.sh once the site is up${RESET}"
+  SITE_API_STATUS="skipped (no drush)"
+else
+  install_file "$SITE_API_PHP_SRC" "$SITE_API_PHP_DEST"
+  install_file_executable "$SITE_API_SH_SRC" "$SITE_API_SH_DEST"
+
+  if [[ "$DRY_RUN" == true ]]; then
+    echo "  ${GRAY}(dry-run) Would run: .claude/tools/site-api.sh${RESET}"
+    SITE_API_STATUS="dry-run"
+  else
+    echo "  Introspecting running site via Drush..."
+    if (cd "$TARGET_DIR" && ./.claude/tools/site-api.sh 2>&1 | sed 's/^/    /'); then
+      SITE_API_STATUS="generated"
+    else
+      warn "Site introspection failed (site not bootstrapped?) — falling back to project-map.md"
+      SITE_API_STATUS="failed (site down)"
+    fi
+  fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Phase 8 — Summary
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
@@ -1755,6 +1852,7 @@ echo "  ${BOLD}Version-aware artifacts${RESET}"
 echo "    Version guide   : ${VERSION_GUIDE_STATUS}"
 echo "    Examples checkout: ${EXAMPLES_STATUS}"
 echo "    gitignore block : ${GITIGNORE_STATUS}"
+echo "    Site-API index  : ${SITE_API_STATUS}"
 echo ""
 echo "══════════════════════════════════════════════"
 echo ""

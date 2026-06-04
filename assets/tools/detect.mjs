@@ -77,10 +77,17 @@ function detectBackend() {
   const platformPhp = composer.config?.platform?.php || null;
   const phpConstraint = req.php || null;
 
+  const coreInLock = lock?.packages?.find((p) => p.name === 'drupal/core');
+
+  // A project is Drupal if it requires core directly OR pulls it in
+  // transitively (e.g. distribution/profile-based projects that require a
+  // profile metapackage instead of drupal/core). The lock is authoritative
+  // for the transitive case.
   const isDrupal = !!(
     req['drupal/core'] ||
     req['drupal/core-recommended'] ||
-    req['drupal/core-composer-scaffold']
+    req['drupal/core-composer-scaffold'] ||
+    coreInLock
   );
   if (!isDrupal) {
     return {
@@ -90,7 +97,18 @@ function detectBackend() {
     };
   }
 
-  const coreInLock = lock?.packages?.find((p) => p.name === 'drupal/core');
+  // Resolve a clean Drupal core version, preferring the locked version and
+  // falling back to the declared constraint. Then derive a normalized major
+  // (digits only) so downstream consumers don't have to re-parse constraint
+  // strings like "^11.0" or "~10.3".
+  const drupalCore =
+    coreInLock?.version ||
+    req['drupal/core-recommended'] ||
+    req['drupal/core'] ||
+    null;
+  const drupalMajorMatch = drupalCore ? String(drupalCore).match(/\d+/) : null;
+  const drupalMajor = drupalMajorMatch ? Number(drupalMajorMatch[0]) : null;
+
   const contribModules = Object.keys(req).filter((k) =>
     k.startsWith('drupal/'),
   ).length;
@@ -149,11 +167,8 @@ function detectBackend() {
         ? 'composer.json:require.php'
         : 'composer.lock:drupal/core',
     framework: 'drupal',
-    drupal_core:
-      coreInLock?.version ||
-      req['drupal/core-recommended'] ||
-      req['drupal/core'] ||
-      null,
+    drupal_core: drupalCore,
+    drupal_major: drupalMajor,
     drupal_constraint:
       req['drupal/core-recommended'] || req['drupal/core'] || null,
     drush: req['drush/drush'] || null,

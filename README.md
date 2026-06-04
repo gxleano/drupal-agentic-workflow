@@ -13,6 +13,7 @@
 | Security issues caught in code review | Security patterns scanned on every file save |
 | Agent invents idioms instead of matching codebase | `.claude/conventions.md` reports actual adoption (hooks, DI, `match`/`switch`) |
 | Agent guesses content types / routes / services | `.claude/project-map.md` lists them from YAML config |
+| Agent hallucinates service IDs / field / route names | `.claude/site-api.json` is the running site's ground truth — grep it before writing |
 | Agent re-litigates decisions you've already made | `.claude/decisions/` ADR scaffolds capture the *why* once |
 | Agent invents API URLs / credentials | `.claude/external-systems.md` documents where they live |
 
@@ -71,6 +72,12 @@ bin/setup.sh /path/to/project
   │              outside the markers are never touched; may print a
   │              `git rm --cached` notice for already-tracked
   │              AI_CONTEXT.md files)
+  │
+  ├─ Phase 7i  : site-api.sh (Drush)→ .claude/site-api.json
+  │              (introspects the RUNNING site for ground-truth service IDs,
+  │              entity/bundle/field machine names, routes, permissions and
+  │              modules; needs a bootable site via ddev/vendor/global drush;
+  │              falls back to project-map.md when the site is down)
   │
   ├─ Phase 8   : Summary (installed / up-to-date / skipped counts)
   │
@@ -217,6 +224,7 @@ The biggest gap between "Claude with skills" and "Claude that produces great cod
 | `skills-recommended.md` | auto | `tools/detect.mjs` | Capability → skill mapping table with descriptions pulled from each skill's frontmatter | When picking which skill to invoke for a task |
 | `conventions.md` | auto | `tools/conventions.mjs` | Adoption stats: `strict_types` %, hook style (`#[Hook]` vs `.module`), constructor promotion, `match`/`switch`, `\Drupal::` anti-patterns, plugin attribute vs annotation, SDC adoption, BEM ratio | Before writing PHP / JS / CSS — match what the codebase actually does |
 | `project-map.md` | auto | `tools/project-map.mjs` | Content types + fields, user roles, routes per custom module, services per custom module, config splits — all from YAML parsing (no Drush needed) | Before touching the data model, routes, or services |
+| `site-api.json` | auto | `tools/site-api.sh` (Drush) | **Ground truth of the running site**: valid service IDs, every entity type, bundle + real field machine names/types, route names, permissions, installed modules | Before injecting a service or referencing a field / route / permission — grep/`jq` it to confirm the identifier exists |
 | `followups.md` | auto | `setup.sh` | The 4 next-step prompts in copy-paste form | When re-running a follow-up manually |
 | `glossary.md` | scaffold | template | Domain terms, German↔English vocabulary | Before naming things in code/UI/commits |
 | `external-systems.md` | scaffold | template | API URLs, credential locations, integration IDs | Before touching integrations |
@@ -233,13 +241,22 @@ The bundled `CLAUDE-TEMPLATE.md` includes a "Project knowledge files" table that
 | `conventions.mjs` | Every PHP/JS/CSS file under custom paths | `conventions.md` with adoption ratios + actionable guidance |
 | `project-map.mjs` | Drupal config (`config/sync/`, `config/default/`, ...) + custom-module `*.routing.yml` / `*.services.yml` | `project-map.md` |
 
-All three are zero-dep Node CLIs (Node 18+). They run cleanly without Drush, DDEV, or a running site — just static file analysis. Re-run any directly:
+The three `.mjs` scanners are zero-dep Node CLIs (Node 18+). They run cleanly without Drush, DDEV, or a running site — just static file analysis. Re-run any directly:
 
 ```bash
 node .claude/tools/detect.mjs --gaps
 node .claude/tools/conventions.mjs --print
 node .claude/tools/project-map.mjs --print
 ```
+
+`site-api.sh` is the one generator that needs a **bootable site** — it runs `site-api.php` through Drush (resolved as `ddev drush` → `vendor/bin/drush` → global `drush`) and writes the live ground-truth index. Re-run it after `drush cim`, module install/uninstall, or field changes; check `meta.generated_at` in the JSON for staleness:
+
+```bash
+.claude/tools/site-api.sh            # writes .claude/site-api.json
+.claude/tools/site-api.sh --print    # also prints to stdout
+```
+
+It reads **definitions only** — never config values, State, settings, or secret entities — so the index is safe to generate, and it's gitignored (transient, site-specific). If the site isn't bootable, it skips with a warning and `project-map.md` remains the static fallback.
 
 ### Skill `provides:` Field (Data-Driven Capability Matching)
 
@@ -481,13 +498,14 @@ your-drupal-project/
 │   ├── settings.json                  # Hook + skill configuration
 │   ├── hooks/                         # pre-bash-guard, post-generation-lint, etc.
 │   ├── skills/                        # Bundled skills
-│   ├── tools/                         # Copies of detect.mjs / conventions.mjs / project-map.mjs
+│   ├── tools/                         # detect.mjs / conventions.mjs / project-map.mjs / site-api.{php,sh}
 │   │
 │   ├── stack.json                     # AUTO — detected stack + capability resolution
 │   ├── gaps.md                        # AUTO — capability gaps + drift warnings
 │   ├── skills-recommended.md          # AUTO — capability → skill mapping
 │   ├── conventions.md                 # AUTO — code convention adoption stats
 │   ├── project-map.md                 # AUTO — content model, routes, services, roles, splits
+│   ├── site-api.json                  # AUTO (gitignored) — live site ground truth via Drush
 │   ├── followups.md                   # AUTO — the 4 next-step prompts in copy-paste form
 │   │
 │   ├── glossary.md                    # SCAFFOLD — domain glossary (team fills in)
@@ -536,6 +554,29 @@ Rules:
 - **Lines outside the markers are never touched.** Your existing `.gitignore` entries are safe — setup only reads and rewrites the region between the two marker lines.
 - **User additions inside the block are preserved during reconciliation.** Setup merges the bundled defaults with any extra lines you've added inside the markers, so you can add project-specific ignores in there without losing them on re-run.
 - **`git rm --cached` notice in Phase 8.** If your repo already tracks `AI_CONTEXT.md` files that the new ignore rules would otherwise cover, Phase 8 prints a one-line notice listing them along with a ready-to-paste `git rm --cached <files>` command. Setup will **never** run that command automatically — untracking files is a destructive history-affecting operation, so it is left to you.
+
+## Live site-API index (`.claude/site-api.json`)
+
+The most common — and most expensive — way an agent breaks Drupal code is by **hallucinating identifiers**: a service ID that was never registered, a field machine name that doesn't match the bundle, a route name that doesn't exist. Static analysis only catches these *after* the wrong code is written. Phase 7i closes that gap by giving the agent the **ground truth of the running site** to check *before* it writes.
+
+`.claude/tools/site-api.sh` runs `.claude/tools/site-api.php` through Drush and writes `.claude/site-api.json` containing:
+
+| Section | Source (live Drupal API) | Kills the error |
+|---------|--------------------------|-----------------|
+| `services` | `\Drupal::getContainer()->getServiceIds()` | inventing/typo'ing service IDs (`entity.manager`) |
+| `entity_types` | `entity_type.manager` | wrong entity class / provider |
+| `bundles` → `fields` | `entity_field.manager` + `entity_type.bundle.info` | wrong field machine name / type / target bundle |
+| `routes` | `router.route_provider` | `Url::fromRoute()` to a non-existent route |
+| `permissions` | `user.permissions` | guarding on a permission that doesn't exist |
+| `modules` | `extension.list.module` | not knowing what contrib is available to reuse |
+
+**Design notes:**
+
+- **Runtime, not static.** Unlike the `.mjs` scanners, this reads the *compiled container* and *field manager*, so it sees UI-added fields, dynamically-registered routes, and `ServiceProvider`-registered services that YAML parsing can never find. `project-map.md` (Phase 7e, static) remains the fallback when the site isn't bootable.
+- **Definitions only — never values.** The extractor reads machine names and types; it never touches config values, State, `settings.php`, or secret entities. The file is gitignored (transient and site-specific).
+- **Queried, not read whole.** It's JSON so the agent greps/`jq`s for one identifier rather than loading the lot: `jq '.bundles."node.article".fields' .claude/site-api.json`.
+- **Refresh on demand.** Re-run `.claude/tools/site-api.sh` after `drush cim`, module install/uninstall, or field changes. `meta.generated_at` records when it was last built.
+- **Defaults.** Includes everything (core routes/services included — a missing core route name is exactly what gets hallucinated), marks base fields with `"base": true` rather than dropping them, and operates on the default site.
 
 ## Contributing
 

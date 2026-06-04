@@ -136,7 +136,8 @@ Before generating code, **read the relevant files in `.claude/`** — they captu
 |------|-----------------|
 | `.claude/drupal-version-guide.md` | Before writing any PHP — version-specific patterns (PHP version, hook attribute style, Symfony/CKEditor versions) for the Drupal core in use. |
 | `.claude/conventions.md` | Before writing PHP/JS/CSS — adoption stats for hook style, DI, `match`/`switch`, etc. Match what the codebase actually does, not the textbook. |
-| `.claude/project-map.md` | Before touching the data model, routes, or services — structural overview of content types, fields, roles, routes per module, and services per module. |
+| `.claude/site-api.json` | **Before injecting a service, referencing a field/route/permission, or loading/querying an entity** — the ground-truth index of *this running site* (valid service IDs, real entity/bundle/field machine names + types, route names, permissions, modules). If an identifier isn't here, it doesn't exist — do not invent it. Query it, don't read it whole: `jq '.bundles."node.article".fields' .claude/site-api.json`. Falls back to `project-map.md` when the site isn't bootable. |
+| `.claude/project-map.md` | Before touching the data model, routes, or services — structural overview of content types, fields, roles, routes per module, and services per module. Static fallback when `site-api.json` is absent. |
 | `.claude/glossary.md` | Before naming things — domain terms (German/English) used in UI, code, and commits. |
 | `.claude/external-systems.md` | Before touching integrations — where API URLs, credentials, and IDs live (never invent endpoints). |
 | `.claude/test-fixtures.md` | Before verifying behavior locally — demo users, payment sandboxes, seed content. |
@@ -146,4 +147,4 @@ Before generating code, **read the relevant files in `.claude/`** — they captu
 | `.claude/gaps.md` | Capabilities without an installed skill + drift warnings — useful when planning new tooling. |
 | `.claude/reference/examples/` | Canonical Drupal patterns checkout — read before improvising. Managed by setup, gitignored, never installed by Drupal. |
 
-These files are scaffolded by `drupal-agentic-workflow` setup. Conventions/stack/gaps/version-guide are auto-generated and refreshed on re-run; glossary/external-systems/test-fixtures/decisions are filled in by the team and preserved across re-runs.
+These files are scaffolded by `drupal-agentic-workflow` setup. Conventions/stack/gaps/version-guide/site-api are auto-generated and refreshed on re-run; glossary/external-systems/test-fixtures/decisions are filled in by the team and preserved across re-runs. `site-api.json` is regenerated on demand with `.claude/tools/site-api.sh` — refresh it after `drush cim`, module install/uninstall, or field changes (check `meta.generated_at` for staleness).
