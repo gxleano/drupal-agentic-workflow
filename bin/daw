@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# daw — drupal-agentic-workflow CLI (Composer bin entry point).
+#
+# Installed into a Drupal project via:
+#   composer require --dev gxleano/drupal-agentic-workflow
+# then run from the project root:
+#   vendor/bin/daw install     # first-time, interactive
+#   vendor/bin/daw update      # non-interactive refresh of context + managed blocks
+#
+# Subcommands:
+#   install [TARGET] [opts]   Full (interactive) install — alias for setup.sh.
+#   update  [TARGET] [opts]   Non-interactive refresh: re-copies .claude/, refreshes
+#                             CLAUDE.md/AGENTS.md managed blocks, and regenerates the
+#                             detected context (stack/conventions/map/version/site-api).
+#                             Never prompts; preserves customized files.
+#   version                   Print the installed version.
+#   help                      Show this help.
+#
+set -euo pipefail
+
+# Resolve this script's real directory, following Composer's vendor/bin symlink.
+# Portable: avoids `readlink -f` (absent on macOS).
+_src="${BASH_SOURCE[0]}"
+while [[ -h "$_src" ]]; do
+  _dir="$(cd -P "$(dirname "$_src")" >/dev/null 2>&1 && pwd)"
+  _src="$(readlink "$_src")"
+  [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+BIN_DIR="$(cd -P "$(dirname "$_src")" >/dev/null 2>&1 && pwd)"
+PKG_DIR="$(cd -P "$BIN_DIR/.." >/dev/null 2>&1 && pwd)"
+SETUP="$BIN_DIR/setup.sh"
+
+cmd_version() {
+  local v=""
+  if command -v git &>/dev/null && git -C "$PKG_DIR" rev-parse --git-dir &>/dev/null; then
+    v="$(git -C "$PKG_DIR" describe --tags --always --dirty 2>/dev/null || true)"
+  fi
+  echo "drupal-agentic-workflow ${v:-dev}"
+}
+
+cmd_help() {
+  # Print the leading comment block (after the shebang + first '#'), stopping
+  # at the first non-comment line.
+  awk 'NR<=2 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$_src"
+}
+
+sub="${1:-help}"
+shift || true
+
+case "$sub" in
+  install)
+    exec "$SETUP" "$@"
+    ;;
+  update)
+    # Non-interactive: skip tool-install offers, the module-analysis prompt, and
+    # the end-of-run follow-ups. Generated context (Phase 7*) still refreshes.
+    exec "$SETUP" --skip-tools --skip-ai-context --skip-followups "$@"
+    ;;
+  version | --version | -v)
+    cmd_version
+    ;;
+  help | --help | -h)
+    cmd_help
+    ;;
+  *)
+    echo "daw: unknown subcommand '$sub' (try: daw help)" >&2
+    exit 1
+    ;;
+esac

@@ -76,6 +76,7 @@ Everything between these markers is managed by `setup.sh` and refreshed on re-ru
 4. Missing config schema for custom config
 5. Business logic in controllers/hooks instead of services
 
+<!-- daw:claude-only:start -->
 ## Skills Reference
 
 Use slash commands for detailed guidance instead of repeating knowledge here:
@@ -127,6 +128,22 @@ Use slash commands for detailed guidance instead of repeating knowledge here:
 | DDEV environment management | `/ddev` |
 | Local Solr setup for DDEV | `/solr-setup` |
 | Workflow setup diagnostics | `/doctor` |
+<!-- daw:claude-only:end -->
+
+<!-- daw:agents-only:start -->
+## Detailed patterns
+
+Task-specific patterns live in `.claude/skills/<name>/SKILL.md`. They are written for Claude Code's skill system but are plain Markdown — **read the relevant `SKILL.md` as reference documentation** before implementing in that area:
+
+| Area | Read |
+|------|------|
+| Generate modules, services, plugins, forms | `.claude/skills/scaffold/SKILL.md` |
+| Migration management | `.claude/skills/migrate/SKILL.md` |
+| DDEV environment management | `.claude/skills/ddev/SKILL.md` |
+| Local Solr setup for DDEV | `.claude/skills/solr-setup/SKILL.md` |
+| Generate PHPUnit tests | `.claude/skills/generate-tests/SKILL.md` |
+| Workflow setup diagnostics | `.claude/skills/doctor/SKILL.md` |
+<!-- daw:agents-only:end -->
 
 ## Project knowledge files
 

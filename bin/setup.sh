@@ -42,8 +42,18 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Resolve TEMPLATE_DIR: the root of the drupal-agentic-workflow repository.
 # This script lives at bin/setup.sh, so the template root is one level up.
+# Follow symlinks so the script still resolves its package root when invoked
+# through Composer's vendor/bin (e.g. vendor/bin/daw → bin/setup.sh). Portable:
+# avoids `readlink -f`, which is absent on macOS.
 # ---------------------------------------------------------------------------
-TEMPLATE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+_daw_src="${BASH_SOURCE[0]}"
+while [[ -h "$_daw_src" ]]; do
+  _daw_dir="$(cd -P "$(dirname "$_daw_src")" >/dev/null 2>&1 && pwd)"
+  _daw_src="$(readlink "$_daw_src")"
+  [[ "$_daw_src" != /* ]] && _daw_src="$_daw_dir/$_daw_src"
+done
+TEMPLATE_DIR="$(cd -P "$(dirname "$_daw_src")/.." >/dev/null 2>&1 && pwd)"
+unset _daw_src _daw_dir
 
 # ---------------------------------------------------------------------------
 # Color helpers — degrade gracefully when output is not a terminal.
@@ -688,8 +698,25 @@ START_MARKER="<!-- drupal-agentic-workflow:start -->"
 END_MARKER="<!-- drupal-agentic-workflow:end -->"
 OLD_MARKER="<!-- drupal-agentic-workflow -->"
 
-# Template content: skip first 5 lines (title, instruction, blank, blank, ---).
-TEMPLATE_CONTENT=$(tail -n +6 "$TEMPLATE_DIR/CLAUDE-TEMPLATE.md")
+# Render the shared template (skipping its 5-line maintainer header), dropping
+# the block family meant for the *other* agent. CLAUDE.md keeps the Claude-only
+# Skills Reference; AGENTS.md keeps the agent-agnostic "Detailed patterns"
+# pointer. One source of truth (CLAUDE-TEMPLATE.md) → two renders, no drift.
+#   $1 = marker family to DROP: "claude-only" | "agents-only"
+render_template_dropping() {
+  local drop="daw:$1"
+  tail -n +6 "$TEMPLATE_DIR/CLAUDE-TEMPLATE.md" | awk -v drop="$drop" '
+    index($0, "<!-- " drop ":start -->") { skip = 1; next }
+    index($0, "<!-- " drop ":end -->")   { skip = 0; next }
+    # Strip the kept family'\''s own marker lines (keep their content).
+    /<!-- daw:(claude|agents)-only:(start|end) -->/ { next }
+    !skip { print }
+  '
+}
+
+# CLAUDE.md gets the Claude-only block; AGENTS.md gets the agent-agnostic one.
+TEMPLATE_CONTENT=$(render_template_dropping agents-only)
+AGENTS_CONTENT=$(render_template_dropping claude-only)
 
 # Project-specific scaffold — added once, never replaced by updates.
 PROJECT_SCAFFOLD=$(cat <<'SCAFFOLD'
@@ -735,6 +762,50 @@ write_managed_block() {
   echo "$TEMPLATE_CONTENT"
   echo ""
   echo "$END_MARKER"
+}
+
+# Idempotently upsert a START/END managed block into an arbitrary file.
+# Replaces content between markers if present, appends if the file exists
+# without markers, or creates the file (with an optional header) if missing.
+# Used for AGENTS.md; CLAUDE.md keeps its own richer merge logic below.
+#   $1 = target file   $2 = block content
+#   $3 = log label     $4 = header line for newly-created files (optional)
+upsert_managed_block() {
+  local file="$1" content="$2" label="$3" header="${4:-}"
+  local block tmp
+  block="$(printf '%s\n\n%s\n\n%s\n' "$START_MARKER" "$content" "$END_MARKER")"
+
+  if [[ -f "$file" ]] && grep -qF "$START_MARKER" "$file"; then
+    if [[ "$DRY_RUN" == true ]]; then
+      log_installed "$label (updated managed block) (dry-run)"
+    else
+      tmp=$(mktemp)
+      local blockfile; blockfile=$(mktemp)
+      printf '%s\n' "$block" > "$blockfile"
+      awk -v start="$START_MARKER" -v end="$END_MARKER" -v tmpl="$blockfile" '
+        $0 == start { while ((getline line < tmpl) > 0) print line; close(tmpl); skip = 1; next }
+        $0 == end   { skip = 0; next }
+        !skip { print }
+      ' "$file" > "$tmp"
+      mv "$tmp" "$file"; rm -f "$blockfile"
+      log_installed "$label (updated managed block)"
+    fi
+  elif [[ -f "$file" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then
+      log_installed "$label (appended managed block) (dry-run)"
+    else
+      { echo ""; printf '%s\n' "$block"; } >> "$file"
+      log_installed "$label (appended managed block)"
+    fi
+  else
+    if [[ "$DRY_RUN" == true ]]; then
+      log_installed "$label (created) (dry-run)"
+    else
+      { [[ -n "$header" ]] && { printf '%s\n\n' "$header"; }; printf '%s\n' "$block"; } > "$file"
+      log_installed "$label (created)"
+    fi
+  fi
+  INSTALLED=$((INSTALLED + 1))
 }
 
 # ---------------------------------------------------------------------------
@@ -893,6 +964,29 @@ fi
 ensure_version_guide_pointer
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Phase 3b — Emit AGENTS.md for non-Claude agents (Cursor, Codex, Gemini, …)
+# ═══════════════════════════════════════════════════════════════════════════
+# AGENTS.md is the cross-agent instruction file convention. It carries the same
+# agent-agnostic Drupal rules and knowledge-file index as CLAUDE.md's managed
+# block, minus the Claude-specific Skill-tool routing (replaced by a pointer to
+# read the SKILL.md files as plain docs). Rendered from the same template.
+echo ""
+echo "${BOLD}Phase 3b: AGENTS.md${RESET}"
+
+AGENTS_HEADER="# AGENTS.md
+
+Cross-agent instructions for this Drupal project. Claude Code reads \`CLAUDE.md\`;
+this file is for other AI coding agents (Cursor, Codex, Gemini CLI, Copilot, …).
+The block below is managed by drupal-agentic-workflow and refreshed on re-run —
+add your own project notes outside the markers."
+
+upsert_managed_block \
+  "$TARGET_DIR/AGENTS.md" \
+  "$AGENTS_CONTENT" \
+  "AGENTS.md" \
+  "$AGENTS_HEADER"
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Phase 4 — Install .prettierrc.json (if missing)
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
@@ -947,7 +1041,6 @@ analyze_module() {
   fi
 
   # ── Scan for key files and structures ──────────────────────────────────
-  local key_files=""
   local has_module_file=false
   local has_routing=false
   local has_services=false
@@ -957,7 +1050,6 @@ analyze_module() {
   local has_config_install=false
   local has_config_schema=false
   local has_templates=false
-  local has_migrations=false
 
   [[ -f "$module_dir/${machine_name}.module" ]] && has_module_file=true
   [[ -f "$module_dir/${machine_name}.routing.yml" ]] && has_routing=true
@@ -968,8 +1060,6 @@ analyze_module() {
   [[ -d "$module_dir/config/install" ]] && has_config_install=true
   [[ -d "$module_dir/config/schema" ]] && has_config_schema=true
   [[ -d "$module_dir/templates" ]] && has_templates=true
-  [[ -d "$module_dir/migrations" || -d "$module_dir/config/install" ]] && \
-    ls "$module_dir"/config/install/migrate.migration.* 2>/dev/null | grep -q . && has_migrations=true
 
   # ── Extract hooks from .module ─────────────────────────────────────────
   local hooks_list=""

@@ -96,13 +96,33 @@ bin/setup.sh /path/to/project
 
 ## Quick Setup
 
-### 1. Clone This Repository
+### 1. Install
+
+**Recommended — as a Composer dev dependency** (per-project, versioned, updatable):
+
+```bash
+# In your Drupal project root. Until it's on Packagist, add the VCS repo first:
+composer config repositories.daw vcs https://github.com/gxleano/drupal-agentic-workflow
+composer require --dev gxleano/drupal-agentic-workflow:dev-main
+```
+
+This installs the `daw` CLI at `vendor/bin/daw`. To keep context fresh as your
+dependencies change, add it to your `composer.json` so it re-runs after every
+`composer update`:
+
+```json
+{
+  "scripts": {
+    "post-update-cmd": ["@php -r \"passthru('vendor/bin/daw update');\""]
+  }
+}
+```
+
+**Alternative — clone once, reference everywhere** (one install serves many projects):
 
 ```bash
 git clone <repo-url> ~/drupal-agentic-workflow
 ```
-
-Keep it somewhere permanent — you'll reference it for each project.
 
 ### 2. Initialize Claude Code in Your Project
 
@@ -116,13 +136,20 @@ This generates a `CLAUDE.md` with auto-detected project info.
 ### 3. Run Setup
 
 ```bash
+vendor/bin/daw install            # if installed via Composer
+# or, if cloned:
 ~/drupal-agentic-workflow/bin/setup.sh .
 ```
+
+Use `vendor/bin/daw update` for a non-interactive refresh (re-copies skills/hooks,
+refreshes the `CLAUDE.md`/`AGENTS.md` managed blocks, and regenerates detected
+context) without re-prompting and while preserving your customized files.
 
 This single command:
 - Checks for code quality tools (`drupal/coder`, `phpstan`) and offers to install them
 - Copies the bundled skills and hooks into `.claude/`
 - Appends Drupal coding rules to your existing `CLAUDE.md` (managed block — refreshed on re-run, your customizations outside the markers are preserved)
+- Writes an `AGENTS.md` with the same agent-agnostic rules for non-Claude agents (Cursor, Codex, Gemini CLI, Copilot, …) — rendered from the same template, so no drift
 - Installs `.prettierrc.json` and `phpstan.neon`
 - Optionally analyzes custom modules and generates `AI_CONTEXT.md` with real module info (hooks, routes, services, etc.)
 - Auto-populates the Custom Modules section in `CLAUDE.md` with discovered modules
@@ -578,6 +605,23 @@ The most common — and most expensive — way an agent breaks Drupal code is by
 - **Refresh on demand.** Re-run `.claude/tools/site-api.sh` after `drush cim`, module install/uninstall, or field changes. `meta.generated_at` records when it was last built.
 - **Defaults.** Includes everything (core routes/services included — a missing core route name is exactly what gets hallucinated), marks base fields with `"base": true` rather than dropping them, and operates on the default site.
 
+## Tests
+
+The tooling itself is tested. Run the full suite (also wired as `composer test`):
+
+```bash
+bash tests/run.sh
+```
+
+Stages (each skipped gracefully if its tool is missing locally; CI runs them all):
+
+- **`bash -n`** — syntax check of every shell script
+- **`shellcheck`** (`--severity=warning`, `-x`) — static analysis of `bin/`, hooks, and tests
+- **`node --test`** — unit tests for the `.mjs` generators (e.g. `conventions.mjs` against fixture projects)
+- **`tests/smoke.sh`** — end-to-end `setup.sh` install into a throwaway project, asserting the `CLAUDE.md`/`AGENTS.md` managed blocks render correctly and that re-runs are idempotent
+
+CI runs `tests/run.sh` on every push/PR via `.github/workflows/ci.yml`.
+
 ## Contributing
 
 Contributions are welcome! Please:
@@ -585,7 +629,7 @@ Contributions are welcome! Please:
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Test with `bin/setup.sh --dry-run` on a sample Drupal project
+4. Run `bash tests/run.sh` (and `bin/setup.sh --dry-run` on a sample Drupal project)
 5. Submit a pull request
 
 When adding new skills, follow the existing pattern: create a directory under `.claude/skills/` with a `SKILL.md` containing frontmatter (name, description) and comprehensive guidance.
