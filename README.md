@@ -38,8 +38,11 @@ Claude writes/edits a file
 ```
 bin/setup.sh /path/to/project
   │
-  ├─ Phase 0-6 : Validate Drupal project, install tools, copy skills/hooks,
-  │              merge CLAUDE.md, install .prettierrc, scan custom modules
+  ├─ Phase 0-6 : Validate Drupal project; install code-quality tools
+  │              (allow-lists the phpcs Composer plugin first, then
+  │              drupal/coder + phpstan, plus optional dev-only drush_dtk
+  │              for compressed Drush output); copy skills/hooks; merge
+  │              CLAUDE.md; install .prettierrc; scan custom modules
   │              for AI_CONTEXT.md
   │
   ├─ Phase 7   : detect.mjs        → .claude/stack.json + gaps.md
@@ -146,7 +149,8 @@ refreshes the `CLAUDE.md`/`AGENTS.md` managed blocks, and regenerates detected
 context) without re-prompting and while preserving your customized files.
 
 This single command:
-- Checks for code quality tools (`drupal/coder`, `phpstan`) and offers to install them
+- Checks for code quality tools (`drupal/coder`, `phpstan`) and offers to install them — first allow-listing the `dealerdirect/phpcodesniffer-composer-installer` Composer plugin so the installs don't abort on Composer 2.2+
+- Optionally installs **`drush_dtk`** (dev-only) — the "Drush Token Killer" that compresses verbose Drush output (`pm:list`, `config:status`, `core:requirements`, …) by 45–97% to save agent tokens; added via an inline `package` repo (the module ships no `composer.json`), required under `require-dev`, and enabled
 - Copies the bundled skills and hooks into `.claude/`
 - Appends Drupal coding rules to your existing `CLAUDE.md` (managed block — refreshed on re-run, your customizations outside the markers are preserved)
 - Writes an `AGENTS.md` with the same agent-agnostic rules for non-Claude agents (Cursor, Codex, Gemini CLI, Copilot, …) — rendered from the same template, so no drift
@@ -355,8 +359,20 @@ Open [`CLAUDE-TEMPLATE.md`](CLAUDE-TEMPLATE.md) and copy the sections into your 
 ### 4. Install Code Quality Tools
 
 ```bash
+# Composer 2.2+ blocks the phpcs plugin until it's allow-listed:
+ddev composer config --no-plugins allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
 ddev composer require --dev drupal/coder phpstan/phpstan mglaman/phpstan-drupal phpstan/phpstan-deprecation-rules
 ```
+
+Optionally add **`drush_dtk`** (dev-only) for compressed Drush output — it ships no `composer.json`, so register an inline package repo first:
+
+```bash
+ddev composer config repositories.drush_dtk '{"type":"package","package":{"name":"ivanboring/drush_dtk","version":"dev-main","type":"drupal-module","source":{"url":"https://github.com/ivanboring/drush_dtk.git","type":"git","reference":"main"}}}'
+ddev composer require --dev ivanboring/drush_dtk:dev-main
+ddev drush en drush_dtk -y
+```
+
+Keep `drush_dtk` out of exported config (`core.extension`) so it stays dev-only.
 
 ### 5. Fill In Project Details
 

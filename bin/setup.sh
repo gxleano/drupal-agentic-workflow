@@ -544,6 +544,33 @@ else
     MISSING_REQUIRED=()
     MISSING_RECOMMENDED=()
 
+    # Composer 2.2+ blocks third-party plugins unless allow-listed. The Drupal
+    # quality stack (drupal/coder → phpcodesniffer-composer-installer) and
+    # drush_dtk's deps pull this plugin in, so every `composer require` below
+    # aborts until it's allowed. Self-heal it first.
+    CS_PLUGIN="dealerdirect/phpcodesniffer-composer-installer"
+    if ! jq -e --arg p "$CS_PLUGIN" \
+        '(.config["allow-plugins"] == true) or (.config["allow-plugins"][$p] == true)' \
+        "$TARGET_DIR/composer.json" >/dev/null 2>&1; then
+      if [[ "$DRY_RUN" == true ]]; then
+        echo "  ${GRAY}(dry-run) Would allow Composer plugin: $CS_PLUGIN${RESET}"
+      else
+        echo "  ${YELLOW}⚠ Composer plugin not allow-listed: $CS_PLUGIN${RESET}"
+        echo "    Required by drupal/coder and drush_dtk; composer require fails without it."
+        echo -n "  Allow it? [Y/n] "
+        read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
+        if [[ "$REPLY" =~ ^[Yy]?$ ]]; then
+          if ddev composer config --no-plugins "allow-plugins.$CS_PLUGIN" true 2>&1 | sed 's/^/    /'; then
+            echo "  ${GREEN}✓ allowed $CS_PLUGIN${RESET}"
+          else
+            echo "  ${YELLOW}⚠ Failed — set manually:${RESET} ddev composer config allow-plugins.$CS_PLUGIN true" >&2
+          fi
+        else
+          echo "  ${GRAY}Skipped — composer installs below will likely fail.${RESET}"
+        fi
+      fi
+    fi
+
     # Required: drupal/coder (provides phpcs Drupal/DrupalPractice standards)
     if grep -q '"drupal/coder"' "$TARGET_DIR/composer.json" 2>/dev/null; then
       echo "  ${GREEN}✓ drupal/coder${RESET} (phpcs Drupal standards)"
@@ -619,6 +646,40 @@ else
           echo "  ${GRAY}Skipped. Install manually when ready:${RESET}"
           echo "    ddev composer require --dev ${MISSING_RECOMMENDED[*]}"
         fi
+      fi
+    fi
+
+    # --- Optional: ivanboring/drush_dtk (Drush Token Killer), dev-only ---
+    # Compresses verbose Drush output (pm:list, config:status, …) by 45–97% to
+    # cut tokens for AI agents. Ships no composer.json, so it needs an inline
+    # "package" repository before it can be required.
+    DTK_PKG='{"type":"package","package":{"name":"ivanboring/drush_dtk","version":"dev-main","type":"drupal-module","source":{"url":"https://github.com/ivanboring/drush_dtk.git","type":"git","reference":"main"}}}'
+    if jq -e '.["require-dev"]["ivanboring/drush_dtk"] // empty' "$TARGET_DIR/composer.json" >/dev/null 2>&1; then
+      echo "  ${GREEN}✓ ivanboring/drush_dtk${RESET} (Drush output compression)"
+    elif [[ "$DRY_RUN" == true ]]; then
+      echo "  ${GRAY}(dry-run) Would offer to install ivanboring/drush_dtk (dev-only Drush Token Killer)${RESET}"
+    else
+      echo ""
+      echo "  ${GRAY}○ ivanboring/drush_dtk${RESET} — dev-only Drush output compression for AI agents"
+      echo -n "  Install drush_dtk (dev-only) and enable it? [Y/n] "
+      read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
+      if [[ "$REPLY" =~ ^[Yy]?$ ]]; then
+        echo "  Installing ivanboring/drush_dtk..."
+        if ddev composer config repositories.drush_dtk "$DTK_PKG" 2>&1 | sed 's/^/    /' \
+          && ddev composer require --dev "ivanboring/drush_dtk:dev-main" 2>&1 | sed 's/^/    /'; then
+          echo "  ${GREEN}✓ drush_dtk installed${RESET}"
+          if ddev drush en drush_dtk -y 2>&1 | sed 's/^/    /'; then
+            echo "  ${GREEN}✓ drush_dtk enabled${RESET} — keep it out of exported config (it's dev-only)"
+          else
+            echo "  ${YELLOW}⚠ Enable manually:${RESET} ddev drush en drush_dtk -y" >&2
+          fi
+        else
+          echo "  ${YELLOW}⚠ Installation failed — install manually:${RESET}" >&2
+          echo "    ddev composer config repositories.drush_dtk '$DTK_PKG'" >&2
+          echo "    ddev composer require --dev ivanboring/drush_dtk:dev-main" >&2
+        fi
+      else
+        echo "  ${GRAY}Skipped.${RESET}"
       fi
     fi
   fi
