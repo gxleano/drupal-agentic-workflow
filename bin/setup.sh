@@ -389,7 +389,7 @@ update_gitignore_managed_block() {
 
     # Identify required lines already present and any extra (user) lines.
     local req
-    for line in "${existing_block[@]}"; do
+    for line in "${existing_block[@]+"${existing_block[@]}"}"; do
       local is_required=0
       for req in "${GITIGNORE_REQUIRED_LINES[@]}"; do
         if [[ "$line" == "$req" ]]; then
@@ -405,7 +405,7 @@ update_gitignore_managed_block() {
     # Determine which required lines are missing.
     for req in "${GITIGNORE_REQUIRED_LINES[@]}"; do
       local found=0
-      for line in "${existing_block[@]}"; do
+      for line in "${existing_block[@]+"${existing_block[@]}"}"; do
         if [[ "$line" == "$req" ]]; then
           found=1
           break
@@ -451,7 +451,7 @@ update_gitignore_managed_block() {
       for req in "${GITIGNORE_REQUIRED_LINES[@]}"; do
         echo "$req"
       done
-      for extra in "${kept_extras[@]}"; do
+      for extra in "${kept_extras[@]+"${kept_extras[@]}"}"; do
         echo "$extra"
       done
     } > "$tmp_body"
@@ -531,6 +531,23 @@ echo "${BOLD}Phase 1: Code Quality Tools${RESET}"
 if [[ "$SKIP_TOOLS" == true ]]; then
   echo "  ${YELLOW}--skip-tools: skipping code quality tools check${RESET}"
 else
+  # Resolve composer + drush runners the same way Phase 7i / the lint hooks do:
+  # prefer DDEV, else fall back to host binaries so non-DDEV projects (make, etc.) work.
+  # Assumes TARGET_DIR has no spaces; arrays keep flags safe regardless.
+  if command -v ddev &>/dev/null && [[ -f "$TARGET_DIR/.ddev/config.yaml" ]]; then
+    COMPOSER_RUN=(ddev composer)
+    DRUSH_RUN=(ddev drush)
+  else
+    COMPOSER_RUN=(composer "--working-dir=$TARGET_DIR")
+    if [[ -x "$TARGET_DIR/vendor/bin/drush" ]]; then
+      DRUSH_RUN=("$TARGET_DIR/vendor/bin/drush")
+    else
+      DRUSH_RUN=(drush)
+    fi
+  fi
+  COMPOSER_HINT="${COMPOSER_RUN[*]}"
+  DRUSH_HINT="${DRUSH_RUN[*]}"
+
   # --- Check host: jq ---
   if command -v jq &>/dev/null; then
     echo "  ${GREEN}✓ jq installed${RESET} (required by hooks)"
@@ -560,10 +577,10 @@ else
         echo -n "  Allow it? [Y/n] "
         read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
         if [[ "$REPLY" =~ ^[Yy]?$ ]]; then
-          if ddev composer config --no-plugins "allow-plugins.$CS_PLUGIN" true 2>&1 | sed 's/^/    /'; then
+          if "${COMPOSER_RUN[@]}" config --no-plugins "allow-plugins.$CS_PLUGIN" true 2>&1 | sed 's/^/    /'; then
             echo "  ${GREEN}✓ allowed $CS_PLUGIN${RESET}"
           else
-            echo "  ${YELLOW}⚠ Failed — set manually:${RESET} ddev composer config allow-plugins.$CS_PLUGIN true" >&2
+            echo "  ${YELLOW}⚠ Failed — set manually:${RESET} $COMPOSER_HINT config allow-plugins.$CS_PLUGIN true" >&2
           fi
         else
           echo "  ${GRAY}Skipped — composer installs below will likely fail.${RESET}"
@@ -606,21 +623,21 @@ else
       echo ""
       echo "  ${YELLOW}Missing required packages: ${MISSING_REQUIRED[*]}${RESET}"
       if [[ "$DRY_RUN" == true ]]; then
-        echo "  ${GRAY}(dry-run) Would prompt to install: ddev composer require --dev ${MISSING_REQUIRED[*]}${RESET}"
+        echo "  ${GRAY}(dry-run) Would prompt to install: $COMPOSER_HINT require --dev ${MISSING_REQUIRED[*]}${RESET}"
       else
-        echo -n "  Install via ddev composer require --dev? [Y/n] "
+        echo -n "  Install via $COMPOSER_HINT require --dev? [Y/n] "
         read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
         if [[ "$REPLY" =~ ^[Yy]?$ ]]; then
           echo "  Installing ${MISSING_REQUIRED[*]}..."
-          if ddev composer require --dev "${MISSING_REQUIRED[@]}" 2>&1 | sed 's/^/    /'; then
+          if "${COMPOSER_RUN[@]}" require --dev "${MISSING_REQUIRED[@]}" 2>&1 | sed 's/^/    /'; then
             echo "  ${GREEN}✓ Required packages installed${RESET}"
           else
             echo "  ${YELLOW}⚠ Installation failed — install manually:${RESET}" >&2
-            echo "    ddev composer require --dev ${MISSING_REQUIRED[*]}" >&2
+            echo "    $COMPOSER_HINT require --dev ${MISSING_REQUIRED[*]}" >&2
           fi
         else
           echo "  ${GRAY}Skipped. Install manually:${RESET}"
-          echo "    ddev composer require --dev ${MISSING_REQUIRED[*]}"
+          echo "    $COMPOSER_HINT require --dev ${MISSING_REQUIRED[*]}"
         fi
       fi
     fi
@@ -630,21 +647,21 @@ else
       echo ""
       echo "  ${GRAY}Missing recommended packages: ${MISSING_RECOMMENDED[*]}${RESET}"
       if [[ "$DRY_RUN" == true ]]; then
-        echo "  ${GRAY}(dry-run) Would prompt to install: ddev composer require --dev ${MISSING_RECOMMENDED[*]}${RESET}"
+        echo "  ${GRAY}(dry-run) Would prompt to install: $COMPOSER_HINT require --dev ${MISSING_RECOMMENDED[*]}${RESET}"
       else
-        echo -n "  Install recommended packages via ddev composer? [y/N] "
+        echo -n "  Install recommended packages via $COMPOSER_HINT? [y/N] "
         read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
         if [[ "$REPLY" =~ ^[Yy]$ ]]; then
           echo "  Installing ${MISSING_RECOMMENDED[*]}..."
-          if ddev composer require --dev "${MISSING_RECOMMENDED[@]}" 2>&1 | sed 's/^/    /'; then
+          if "${COMPOSER_RUN[@]}" require --dev "${MISSING_RECOMMENDED[@]}" 2>&1 | sed 's/^/    /'; then
             echo "  ${GREEN}✓ Recommended packages installed${RESET}"
           else
             echo "  ${YELLOW}⚠ Installation failed — install manually:${RESET}" >&2
-            echo "    ddev composer require --dev ${MISSING_RECOMMENDED[*]}" >&2
+            echo "    $COMPOSER_HINT require --dev ${MISSING_RECOMMENDED[*]}" >&2
           fi
         else
           echo "  ${GRAY}Skipped. Install manually when ready:${RESET}"
-          echo "    ddev composer require --dev ${MISSING_RECOMMENDED[*]}"
+          echo "    $COMPOSER_HINT require --dev ${MISSING_RECOMMENDED[*]}"
         fi
       fi
     fi
@@ -665,18 +682,18 @@ else
       read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
       if [[ "$REPLY" =~ ^[Yy]?$ ]]; then
         echo "  Installing ivanboring/drush_dtk..."
-        if ddev composer config repositories.drush_dtk "$DTK_PKG" 2>&1 | sed 's/^/    /' \
-          && ddev composer require --dev "ivanboring/drush_dtk:dev-main" 2>&1 | sed 's/^/    /'; then
+        if "${COMPOSER_RUN[@]}" config repositories.drush_dtk "$DTK_PKG" 2>&1 | sed 's/^/    /' \
+          && "${COMPOSER_RUN[@]}" require --dev -W "ivanboring/drush_dtk:dev-main" 2>&1 | sed 's/^/    /'; then
           echo "  ${GREEN}✓ drush_dtk installed${RESET}"
-          if ddev drush en drush_dtk -y 2>&1 | sed 's/^/    /'; then
+          if "${DRUSH_RUN[@]}" en drush_dtk -y 2>&1 | sed 's/^/    /'; then
             echo "  ${GREEN}✓ drush_dtk enabled${RESET} — keep it out of exported config (it's dev-only)"
           else
-            echo "  ${YELLOW}⚠ Enable manually:${RESET} ddev drush en drush_dtk -y" >&2
+            echo "  ${YELLOW}⚠ Enable manually:${RESET} $DRUSH_HINT en drush_dtk -y" >&2
           fi
         else
           echo "  ${YELLOW}⚠ Installation failed — install manually:${RESET}" >&2
-          echo "    ddev composer config repositories.drush_dtk '$DTK_PKG'" >&2
-          echo "    ddev composer require --dev ivanboring/drush_dtk:dev-main" >&2
+          echo "    $COMPOSER_HINT config repositories.drush_dtk '$DTK_PKG'" >&2
+          echo "    $COMPOSER_HINT require --dev -W ivanboring/drush_dtk:dev-main" >&2
         fi
       else
         echo "  ${GRAY}Skipped.${RESET}"
