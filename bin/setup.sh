@@ -563,7 +563,7 @@ else
 
     # Composer 2.2+ blocks third-party plugins unless allow-listed. The Drupal
     # quality stack (drupal/coder → phpcodesniffer-composer-installer) and
-    # drush_dtk's deps pull this plugin in, so every `composer require` below
+    # dtk's deps pull this plugin in, so every `composer require` below
     # aborts until it's allowed. Self-heal it first.
     CS_PLUGIN="dealerdirect/phpcodesniffer-composer-installer"
     if ! jq -e --arg p "$CS_PLUGIN" \
@@ -573,7 +573,7 @@ else
         echo "  ${GRAY}(dry-run) Would allow Composer plugin: $CS_PLUGIN${RESET}"
       else
         echo "  ${YELLOW}⚠ Composer plugin not allow-listed: $CS_PLUGIN${RESET}"
-        echo "    Required by drupal/coder and drush_dtk; composer require fails without it."
+        echo "    Required by drupal/coder and dtk; composer require fails without it."
         echo -n "  Allow it? [Y/n] "
         read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
         if [[ "$REPLY" =~ ^[Yy]?$ ]]; then
@@ -666,34 +666,30 @@ else
       fi
     fi
 
-    # --- Optional: ivanboring/drush_dtk (Drush Token Killer), dev-only ---
+    # --- Optional: drupal/dtk (Drush Token Killer), dev-only ---
     # Compresses verbose Drush output (pm:list, config:status, …) by 45–97% to
-    # cut tokens for AI agents. Ships no composer.json, so it needs an inline
-    # "package" repository before it can be required.
-    DTK_PKG='{"type":"package","package":{"name":"ivanboring/drush_dtk","version":"dev-main","type":"drupal-module","source":{"url":"https://github.com/ivanboring/drush_dtk.git","type":"git","reference":"main"}}}'
-    if jq -e '.["require-dev"]["ivanboring/drush_dtk"] // empty' "$TARGET_DIR/composer.json" >/dev/null 2>&1; then
-      echo "  ${GREEN}✓ ivanboring/drush_dtk${RESET} (Drush output compression)"
+    # cut tokens for AI agents. Published on drupal.org, so a plain require works.
+    if jq -e '.["require-dev"]["drupal/dtk"] // empty' "$TARGET_DIR/composer.json" >/dev/null 2>&1; then
+      echo "  ${GREEN}✓ drupal/dtk${RESET} (Drush output compression)"
     elif [[ "$DRY_RUN" == true ]]; then
-      echo "  ${GRAY}(dry-run) Would offer to install ivanboring/drush_dtk (dev-only Drush Token Killer)${RESET}"
+      echo "  ${GRAY}(dry-run) Would offer to install drupal/dtk (dev-only Drush Token Killer)${RESET}"
     else
       echo ""
-      echo "  ${GRAY}○ ivanboring/drush_dtk${RESET} — dev-only Drush output compression for AI agents"
-      echo -n "  Install drush_dtk (dev-only) and enable it? [Y/n] "
+      echo "  ${GRAY}○ drupal/dtk${RESET} — dev-only Drush output compression for AI agents"
+      echo -n "  Install dtk (dev-only) and enable it? [Y/n] "
       read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
       if [[ "$REPLY" =~ ^[Yy]?$ ]]; then
-        echo "  Installing ivanboring/drush_dtk..."
-        if "${COMPOSER_RUN[@]}" config repositories.drush_dtk "$DTK_PKG" 2>&1 | sed 's/^/    /' \
-          && "${COMPOSER_RUN[@]}" require --dev -W "ivanboring/drush_dtk:dev-main" 2>&1 | sed 's/^/    /'; then
-          echo "  ${GREEN}✓ drush_dtk installed${RESET}"
-          if "${DRUSH_RUN[@]}" en drush_dtk -y 2>&1 | sed 's/^/    /'; then
-            echo "  ${GREEN}✓ drush_dtk enabled${RESET} — keep it out of exported config (it's dev-only)"
+        echo "  Installing drupal/dtk..."
+        if "${COMPOSER_RUN[@]}" require --dev -W "drupal/dtk:^1.0" 2>&1 | sed 's/^/    /'; then
+          echo "  ${GREEN}✓ dtk installed${RESET}"
+          if "${DRUSH_RUN[@]}" en dtk -y 2>&1 | sed 's/^/    /'; then
+            echo "  ${GREEN}✓ dtk enabled${RESET} — keep it out of exported config (it's dev-only)"
           else
-            echo "  ${YELLOW}⚠ Enable manually:${RESET} $DRUSH_HINT en drush_dtk -y" >&2
+            echo "  ${YELLOW}⚠ Enable manually:${RESET} $DRUSH_HINT en dtk -y" >&2
           fi
         else
           echo "  ${YELLOW}⚠ Installation failed — install manually:${RESET}" >&2
-          echo "    $COMPOSER_HINT config repositories.drush_dtk '$DTK_PKG'" >&2
-          echo "    $COMPOSER_HINT require --dev -W ivanboring/drush_dtk:dev-main" >&2
+          echo "    $COMPOSER_HINT require --dev -W drupal/dtk:^1.0" >&2
         fi
       else
         echo "  ${GRAY}Skipped.${RESET}"

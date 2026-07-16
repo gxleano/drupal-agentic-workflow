@@ -798,51 +798,28 @@ ddev exec phpcs  --standard=Drupal,DrupalPractice --extensions=php,module,inc,in
 4. **Update AI_CONTEXT.md**: If you created new classes or changed architecture, update the module's `AI_CONTEXT.md`
 5. **Clear caches**: `ddev drush cr` (always after adding new classes/services/routes)
 
-## 4b. (Optional) Dev-only Drush output compression — `drush_dtk`
+## 4b. (Optional) Dev-only Drush output compression — `dtk`
 
-`ivanboring/drush_dtk` ("Drush Token Killer") compresses verbose Drush output
+`drupal/dtk` ("Drush Token Killer") compresses verbose Drush output
 (`pm:list`, `config:status`, `core:requirements`, `views:list`, …) by 45–97%,
 cutting tokens for AI agents that shell out to Drush. Offer this as a **one-time,
 project-wide** dev setup — it is not per-module, so only suggest it when the user
-asks to "install drush_dtk" / "add dev Drush tooling", or when bootstrapping a
+asks to "install dtk" / "add dev Drush tooling", or when bootstrapping a
 new site that doesn't have it yet.
 
-The module ships **no `composer.json`**, so it can't be required as a normal
-package. Add an inline `package` repository so it stays Composer-managed and
-reproducible (better than a manual `git clone`, which needs re-doing per
-environment and risks vendoring a copy into the site repo). In the site's
-`composer.json`:
-
-```json
-"repositories": {
-    "drush_dtk": {
-        "type": "package",
-        "package": {
-            "name": "ivanboring/drush_dtk",
-            "version": "dev-main",
-            "type": "drupal-module",
-            "source": {
-                "url": "https://github.com/ivanboring/drush_dtk.git",
-                "type": "git",
-                "reference": "main"
-            }
-        }
-    }
-}
-```
-
-Then require it **dev-only** (kept out of `--no-dev` production builds) and enable
-it locally:
+Published on drupal.org, so it requires like any other contrib module — no
+inline package repository needed. Require it **dev-only** (kept out of
+`--no-dev` production builds) and enable it locally:
 
 ```bash
-composer require --dev ivanboring/drush_dtk:dev-main
-ddev drush en drush_dtk -y && ddev drush cr
+composer require --dev drupal/dtk:^1.0
+ddev drush en dtk -y && ddev drush cr
 ```
 
-`type: drupal-module` + `composer/installers` lands it in `web/modules/contrib/`.
-Drupal has no native "dev-only enabled" flag — keep it **out of exported config**
-(don't commit it to `core.extension`), or assign it to a dev **Config Split** if
-the project manages enabled modules via config. Opt out per-command with
+`composer/installers` lands it in `web/modules/contrib/`. Drupal has no native
+"dev-only enabled" flag — keep it **out of exported config** (don't commit it
+to `core.extension`), or assign it to a dev **Config Split** if the project
+manages enabled modules via config. Opt out per-command with
 `--no-ai-compress`. Requires Drupal 11+ / Drush 13+.
 
 ## 5. Decision Guide
@@ -862,7 +839,7 @@ When unsure which scaffold to use:
 | "listen for events" / "on kernel request" | `event-subscriber` |
 | "custom entity" / "content entity" | `entity` |
 | "field widget" / "field formatter" | `plugin` (field) |
-| "install drush_dtk" / "add dev Drush tooling" / "reduce Drush tokens" | see §4b (dev-only setup, not a scaffold) |
+| "install dtk" / "add dev Drush tooling" / "reduce Drush tokens" | see §4b (dev-only setup, not a scaffold) |
 
 ## 6. Output
 
