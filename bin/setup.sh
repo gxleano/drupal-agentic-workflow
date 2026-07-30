@@ -734,6 +734,12 @@ install_file \
   "$TARGET_DIR/.claude/settings.json"
 
 # --- hooks ---
+# Shared library sourced by the lint/phpstan hooks — must be installed or they
+# abort on a missing file. Sourced, never executed, so it stays non-executable.
+install_file \
+  "$TEMPLATE_DIR/.claude/hooks/lib/php-tools.sh" \
+  "$TARGET_DIR/.claude/hooks/lib/php-tools.sh"
+
 install_file_executable \
   "$TEMPLATE_DIR/.claude/hooks/pre-bash-guard.sh" \
   "$TARGET_DIR/.claude/hooks/pre-bash-guard.sh"
