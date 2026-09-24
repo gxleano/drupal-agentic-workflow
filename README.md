@@ -41,8 +41,8 @@ bin/setup.sh /path/to/project
   ├─ Phase 0-6 : Validate Drupal project; install code-quality tools
   │              (allow-lists the phpcs Composer plugin first, then
   │              drupal/coder + phpstan, plus optional dev-only dtk
-  │              for compressed Drush output); copy skills/hooks; merge
-  │              CLAUDE.md; install .prettierrc; scan custom modules
+  │              for compressed Drush output); copy skills/hooks; write
+  │              AGENTS.md + CLAUDE.md; install .prettierrc; scan custom modules
   │              for AI_CONTEXT.md
   │
   ├─ Phase 7   : detect.mjs        → .claude/stack.json + gaps.md
@@ -152,11 +152,12 @@ This single command:
 - Checks for code quality tools (`drupal/coder`, `phpstan`) and offers to install them — first allow-listing the `dealerdirect/phpcodesniffer-composer-installer` Composer plugin so the installs don't abort on Composer 2.2+
 - Optionally installs **`dtk`** (dev-only) — the "Drush Token Killer" that compresses verbose Drush output (`pm:list`, `config:status`, `core:requirements`, …) by 45–97% to save agent tokens; required under `require-dev` from drupal.org, and enabled
 - Copies the bundled skills and hooks into `.claude/`
-- Appends Drupal coding rules to your existing `CLAUDE.md` (managed block — refreshed on re-run, your customizations outside the markers are preserved)
-- Writes an `AGENTS.md` with the same agent-agnostic rules for non-Claude agents (Cursor, Codex, Gemini CLI, Copilot, …) — rendered from the same template, so no drift
+- Writes the Drupal coding rules and project sections to `AGENTS.md`, the instruction file shared by Claude Code, Cursor, Codex, Gemini CLI, Copilot, … (managed block — refreshed on re-run, your customizations outside the markers are preserved)
+- Adds a managed block to `CLAUDE.md` that imports `AGENTS.md` (`@AGENTS.md`) and adds only the Claude-only Skills Reference, so the rules exist once. The import is used instead of Claude Code's native `AGENTS.md` loading because Claude Code skips `AGENTS.md` whenever a `CLAUDE.md` exists, and some sessions read `CLAUDE.md` only
+- Upgrading from a version that kept everything in `CLAUDE.md`: its managed block is replaced by the import, and existing project sections (Custom Modules, Project Lessons, …) are left in `CLAUDE.md` — move them to `AGENTS.md` to share them with other agents
 - Installs `.prettierrc.json` and `phpstan.neon`
 - Optionally analyzes custom modules and generates `AI_CONTEXT.md` with real module info (hooks, routes, services, etc.)
-- Auto-populates the Custom Modules section in `CLAUDE.md` with discovered modules
+- Auto-populates the Custom Modules section in `AGENTS.md` with discovered modules
 - **Generates the project-context files** that agents read: `stack.json`, `skills-recommended.md`, `conventions.md`, `project-map.md`, `gaps.md`
 - **Scaffolds knowledge files** the team fills in over time: `glossary.md`, `external-systems.md`, `test-fixtures.md`, `decisions/`
 - **Offers to launch `claude`** at the end for the 4 manual follow-up tasks (filling project details, contrib module list, etc.)
@@ -179,7 +180,7 @@ Options:
 Phase 9 of `setup.sh` automatically offers to launch `claude` for each of these tasks. If you skipped them (`--skip-followups`, ran in CI, or chose `N` at the prompt), the prompts are saved to `.claude/followups.md` — open the file and run `claude "<paste prompt>"` for any task whenever you're ready.
 
 The 4 follow-ups:
-- **Fill in CLAUDE.md project details** — agent uses `stack.json`, `project-map.md`, `conventions.md` to draft project overview and architecture notes.
+- **Fill in AGENTS.md project details** — agent uses `stack.json`, `project-map.md`, `conventions.md` to draft project overview and architecture notes.
 - **Verify Custom Modules descriptions** — agent cross-references each module's `AI_CONTEXT.md` and the project map to tighten the auto-populated descriptions.
 - **List installed contrib modules** — agent reads `composer.json`, groups packages by category, fills the Contributed Modules section.
 - **Review AI_CONTEXT.md per module** — agent appends a "Domain notes" section to each capturing business logic + gotchas (keeping the auto-generated tables intact).
@@ -239,7 +240,7 @@ claude
 ### Other
 
 - **Starter theme scaffold** — Ready-to-use theme template in `assets/theme-template/`
-- **CLAUDE-TEMPLATE.md** — Drupal coding standards appended to your project's CLAUDE.md
+- **AGENTS-TEMPLATE.md** — Drupal coding standards written to your project's `AGENTS.md` (its Claude-only block goes to `CLAUDE.md`)
 - **phpstan.neon** — Generated with Drupal-specific configuration
 
 ## Project Context Files
@@ -354,7 +355,7 @@ claude /init
 
 ### 3. Add Drupal Rules
 
-Open [`CLAUDE-TEMPLATE.md`](CLAUDE-TEMPLATE.md) and copy the sections into your project's `CLAUDE.md`.
+Open [`AGENTS-TEMPLATE.md`](AGENTS-TEMPLATE.md) and copy everything except the `daw:claude-only` block into your project's `AGENTS.md`. Then add `@AGENTS.md` and the `daw:claude-only` block (Skills Reference) to your `CLAUDE.md`.
 
 ### 4. Install Code Quality Tools
 
@@ -375,7 +376,7 @@ Keep `dtk` out of exported config (`core.extension`) so it stays dev-only.
 
 ### 5. Fill In Project Details
 
-In your `CLAUDE.md`, complete the Custom Modules and Contributed Modules sections.
+In your `AGENTS.md`, complete the Custom Modules and Contributed Modules sections.
 
 ### 6. Review AI_CONTEXT.md Files
 
@@ -559,7 +560,8 @@ your-drupal-project/
 │
 ├── .prettierrc.json                   # Prettier config (JS/CSS/Twig/YAML/JSON)
 ├── phpstan.neon                       # PHPStan config (generated)
-├── CLAUDE.md                          # Managed block + project sections
+├── AGENTS.md                          # Managed rules block + project sections (all agents)
+├── CLAUDE.md                          # Managed block: @AGENTS.md import + Skills Reference
 └── web/modules/custom/<module>/
     └── AI_CONTEXT.md                  # AUTO — per-module context (keys files, hooks, routes, services)
 ```
@@ -633,7 +635,7 @@ Stages (each skipped gracefully if its tool is missing locally; CI runs them all
 - **`bash -n`** — syntax check of every shell script
 - **`shellcheck`** (`--severity=warning`, `-x`) — static analysis of `bin/`, hooks, and tests
 - **`node --test`** — unit tests for the `.mjs` generators (e.g. `conventions.mjs` against fixture projects)
-- **`tests/smoke.sh`** — end-to-end `setup.sh` install into a throwaway project, asserting the `CLAUDE.md`/`AGENTS.md` managed blocks render correctly and that re-runs are idempotent
+- **`tests/smoke.sh`** — end-to-end `setup.sh` install into a throwaway project, asserting that `AGENTS.md` carries the rules, `CLAUDE.md` imports it, re-runs are idempotent, and a `CLAUDE.md`-centric install upgrades cleanly
 
 CI runs `tests/run.sh` on every push/PR via `.github/workflows/ci.yml`.
 

@@ -1,7 +1,7 @@
 # Drupal Coding Rules — Template
 
-> This file is the source of managed rules injected into your project's `CLAUDE.md`.
-> Lines 1-3 are skipped by setup.sh. Content below the `---` is what gets inserted.
+> Source of the managed blocks setup.sh writes: the `daw:claude-only` block goes to `CLAUDE.md` (after an `@AGENTS.md` import), everything else to `AGENTS.md`.
+> Lines 1-5 are skipped by setup.sh. Content below the `---` is what gets inserted.
 
 ---
 
@@ -130,10 +130,9 @@ Use slash commands for detailed guidance instead of repeating knowledge here:
 | Workflow setup diagnostics | `/doctor` |
 <!-- daw:claude-only:end -->
 
-<!-- daw:agents-only:start -->
 ## Detailed patterns
 
-Task-specific patterns live in `.claude/skills/<name>/SKILL.md`. They are written for Claude Code's skill system but are plain Markdown — **read the relevant `SKILL.md` as reference documentation** before implementing in that area:
+Task-specific patterns live in `.claude/skills/<name>/SKILL.md`. Claude Code loads them as skills; they are plain Markdown, so any other agent should **read the relevant `SKILL.md` as reference documentation** before implementing in that area:
 
 | Area | Read |
 |------|------|
@@ -143,7 +142,6 @@ Task-specific patterns live in `.claude/skills/<name>/SKILL.md`. They are writte
 | Local Solr setup for DDEV | `.claude/skills/solr-setup/SKILL.md` |
 | Generate PHPUnit tests | `.claude/skills/generate-tests/SKILL.md` |
 | Workflow setup diagnostics | `.claude/skills/doctor/SKILL.md` |
-<!-- daw:agents-only:end -->
 
 ## Project knowledge files
 

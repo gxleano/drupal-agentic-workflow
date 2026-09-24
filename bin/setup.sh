@@ -16,10 +16,10 @@
 #   0. Validate target is a Drupal project (composer.json with drupal/core)
 #   1. Check and install code quality tools (phpcs, phpstan)
 #   2. Copy .claude/ directory (skills, hooks, settings)
-#   3. Append Drupal rules to CLAUDE.md (or create from template)
+#   3. Write Drupal rules to AGENTS.md; CLAUDE.md imports it (+ Claude-only skills)
 #   4. Install .prettierrc.json (if missing)
 #   5. (Optional) Analyze web/modules/custom/ and generate AI_CONTEXT.md with real module info
-#   6. Update CLAUDE.md Custom Modules section with discovered modules
+#   6. Update the Custom Modules section (AGENTS.md) with discovered modules
 #   7. Detect stack (PHP/Drupal/frontend) and report skill capability gaps
 #   7b. Write .claude/skills-recommended.md mapping capabilities → skills
 #   7c. Scan custom code for convention adoption; write .claude/conventions.md
@@ -30,7 +30,7 @@
 #   7h. Maintain managed .gitignore block
 #   7i. Build live site-API index (Drush) → .claude/site-api.json
 #   8. Print summary with counts and next steps
-#   9. Offer interactive `claude` follow-ups for CLAUDE.md / AI_CONTEXT polish
+#   9. Offer interactive `claude` follow-ups for AGENTS.md / AI_CONTEXT polish
 #
 # Idempotency rules:
 #   - File exists and matches source → "up to date"
@@ -123,10 +123,10 @@ Phases:
   0. Validate target is a Drupal project (composer.json with drupal/core)
   1. Check and install code quality tools (phpcs, phpstan)
   2. Copy .claude/ directory (skills, hooks, settings)
-  3. Append Drupal rules to CLAUDE.md (or create from template)
+  3. Write Drupal rules to AGENTS.md; CLAUDE.md imports it (+ Claude-only skills)
   4. Install .prettierrc.json (if missing)
   5. (Optional) Analyze custom modules and generate AI_CONTEXT.md files
-  6. Update CLAUDE.md Custom Modules section with discovered modules
+  6. Update the Custom Modules section (AGENTS.md) with discovered modules
   7. Detect stack and report skill capability gaps
   7b. Write .claude/skills-recommended.md mapping capabilities → skills
   7c. Scan custom code for convention adoption; write .claude/conventions.md
@@ -219,7 +219,7 @@ log_skipped() {
 
 # Sub-bullet note — used for secondary edits to a file already counted in
 # INSTALLED/UP_TO_DATE this run (e.g., the version-guide pointer appended
-# alongside the main CLAUDE.md merge). Does not affect counters.
+# alongside the main AGENTS.md merge). Does not affect counters.
 log_note() {
   echo "    ${GRAY}↳${RESET} $1"
 }
@@ -763,34 +763,43 @@ while IFS= read -r src_file; do
 done < <(find "$TEMPLATE_DIR/.claude/skills" -type f | sort)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 3 — Merge Drupal rules into CLAUDE.md
+# Phase 3 — Write Drupal rules to AGENTS.md (read by every coding agent)
 # ═══════════════════════════════════════════════════════════════════════════
+# AGENTS.md is the canonical instruction file: Cursor, Codex, Gemini CLI,
+# Copilot and Claude Code all read it. CLAUDE.md (Phase 3b) only imports it
+# via `@AGENTS.md` and adds the Claude-only Skills Reference, so the rules
+# live in one file. The import (rather than relying on Claude Code's native
+# AGENTS.md support) is needed because Claude Code skips AGENTS.md whenever a
+# CLAUDE.md exists, and some sessions read CLAUDE.md only.
 echo ""
-echo "${BOLD}Phase 3: CLAUDE.md${RESET}"
+echo "${BOLD}Phase 3: AGENTS.md${RESET}"
 
 START_MARKER="<!-- drupal-agentic-workflow:start -->"
 END_MARKER="<!-- drupal-agentic-workflow:end -->"
 OLD_MARKER="<!-- drupal-agentic-workflow -->"
 
-# Render the shared template (skipping its 5-line maintainer header), dropping
-# the block family meant for the *other* agent. CLAUDE.md keeps the Claude-only
-# Skills Reference; AGENTS.md keeps the agent-agnostic "Detailed patterns"
-# pointer. One source of truth (CLAUDE-TEMPLATE.md) → two renders, no drift.
-#   $1 = marker family to DROP: "claude-only" | "agents-only"
-render_template_dropping() {
-  local drop="daw:$1"
-  tail -n +6 "$TEMPLATE_DIR/CLAUDE-TEMPLATE.md" | awk -v drop="$drop" '
-    index($0, "<!-- " drop ":start -->") { skip = 1; next }
-    index($0, "<!-- " drop ":end -->")   { skip = 0; next }
-    # Strip the kept family'\''s own marker lines (keep their content).
-    /<!-- daw:(claude|agents)-only:(start|end) -->/ { next }
-    !skip { print }
-  '
-}
+CLAUDE_ONLY_START="<!-- daw:claude-only:start -->"
+CLAUDE_ONLY_END="<!-- daw:claude-only:end -->"
 
-# CLAUDE.md gets the Claude-only block; AGENTS.md gets the agent-agnostic one.
-TEMPLATE_CONTENT=$(render_template_dropping agents-only)
-AGENTS_CONTENT=$(render_template_dropping claude-only)
+# Render the template (skipping its 5-line maintainer header). AGENTS.md gets
+# everything outside the claude-only block; CLAUDE.md gets only that block.
+TEMPLATE_BODY=$(tail -n +6 "$TEMPLATE_DIR/AGENTS-TEMPLATE.md")
+AGENTS_CONTENT=$(printf '%s\n' "$TEMPLATE_BODY" | awk -v s="$CLAUDE_ONLY_START" -v e="$CLAUDE_ONLY_END" '
+  $0 == s { skip = 1; next }
+  $0 == e { skip = 0; next }
+  !skip { print }
+')
+CLAUDE_ONLY_CONTENT=$(printf '%s\n' "$TEMPLATE_BODY" | awk -v s="$CLAUDE_ONLY_START" -v e="$CLAUDE_ONLY_END" '
+  $0 == e { keep = 0 }
+  keep { print }
+  $0 == s { keep = 1 }
+')
+CLAUDE_CONTENT="@AGENTS.md
+
+Shared project rules live in \`AGENTS.md\`, imported above so every Claude Code
+session loads them. Only Claude Code-specific additions belong in this file.
+
+$CLAUDE_ONLY_CONTENT"
 
 # Project-specific scaffold — added once, never replaced by updates.
 PROJECT_SCAFFOLD=$(cat <<'SCAFFOLD'
@@ -819,7 +828,7 @@ Located in `web/modules/custom/`. Each module has an `AI_CONTEXT.md` file — **
 ## Project Lessons
 
 <!-- This section is yours — it lives outside the managed block and is never overwritten by setup.sh updates.
-     When Claude makes a mistake you correct, add it here so it won't repeat across sessions.
+     When an agent makes a mistake you correct, add it here so it won't repeat across sessions.
 
      Format: - <rule> (learned YYYY-MM-DD)
      Examples:
@@ -829,11 +838,11 @@ Located in `web/modules/custom/`. Each module has an `AI_CONTEXT.md` file — **
 SCAFFOLD
 )
 
-# Helper: write the managed block (markers + template content).
+# Helper: write the CLAUDE.md managed block (markers + import + Claude-only).
 write_managed_block() {
   echo "$START_MARKER"
   echo ""
-  echo "$TEMPLATE_CONTENT"
+  echo "$CLAUDE_CONTENT"
   echo ""
   echo "$END_MARKER"
 }
@@ -841,7 +850,6 @@ write_managed_block() {
 # Idempotently upsert a START/END managed block into an arbitrary file.
 # Replaces content between markers if present, appends if the file exists
 # without markers, or creates the file (with an optional header) if missing.
-# Used for AGENTS.md; CLAUDE.md keeps its own richer merge logic below.
 #   $1 = target file   $2 = block content
 #   $3 = log label     $4 = header line for newly-created files (optional)
 upsert_managed_block() {
@@ -883,7 +891,7 @@ upsert_managed_block() {
 }
 
 # ---------------------------------------------------------------------------
-# Version-guide pointer block — idempotently injected into CLAUDE.md so the
+# Version-guide pointer block — idempotently injected into AGENTS.md so every
 # coding agent always sees a one-line reference to the per-version Drupal
 # guide rendered by Phase 7f. The marker comment lets future setup.sh runs
 # locate and rewrite the line without duplicating.
@@ -891,16 +899,17 @@ upsert_managed_block() {
 VERSION_GUIDE_POINTER_MARKER="<!-- drupal-agentic-workflow: version-guide-pointer -->"
 VERSION_GUIDE_POINTER_LINE="See \`.claude/drupal-version-guide.md\` for version-specific patterns; prefer it over generic Drupal advice."
 
+#   $1 = file to hold the pointer
 ensure_version_guide_pointer() {
-  local claude_md="$TARGET_DIR/CLAUDE.md"
-  [[ -f "$claude_md" ]] || return 0
+  local md="$1"
+  [[ -f "$md" ]] || return 0
 
-  if grep -qF "$VERSION_GUIDE_POINTER_MARKER" "$claude_md"; then
+  if grep -qF "$VERSION_GUIDE_POINTER_MARKER" "$md"; then
     # Marker present: extract the line directly below it and compare.
     local current_line
     current_line="$(awk -v m="$VERSION_GUIDE_POINTER_MARKER" '
       $0 == m { getline nxt; print nxt; exit }
-    ' "$claude_md")"
+    ' "$md")"
 
     if [[ "$current_line" == "$VERSION_GUIDE_POINTER_LINE" ]]; then
       log_note "version-guide pointer up to date"
@@ -924,8 +933,8 @@ ensure_version_guide_pointer() {
         next
       }
       { print }
-    ' "$claude_md" > "$tmp"
-    mv "$tmp" "$claude_md"
+    ' "$md" > "$tmp"
+    mv "$tmp" "$md"
     log_note "refreshed version-guide pointer"
     return 0
   fi
@@ -938,127 +947,132 @@ ensure_version_guide_pointer() {
 
   {
     # Ensure file ends with a newline before appending a separating blank line.
-    if [[ -n "$(tail -c1 "$claude_md")" ]]; then
+    if [[ -n "$(tail -c1 "$md")" ]]; then
       echo ""
     fi
     echo ""
     echo "$VERSION_GUIDE_POINTER_MARKER"
     echo "$VERSION_GUIDE_POINTER_LINE"
-  } >> "$claude_md"
+  } >> "$md"
   log_note "added version-guide pointer"
 }
 
-if [[ -f "$TARGET_DIR/CLAUDE.md" ]]; then
-  if grep -qF "$START_MARKER" "$TARGET_DIR/CLAUDE.md"; then
-    # ── New markers found: replace content between them ──────────────
-    if [[ "$DRY_RUN" == true ]]; then
-      log_installed "CLAUDE.md (updated managed rules) (dry-run)"
-    else
-      TEMP_FILE=$(mktemp)
-      TEMPLATE_FILE=$(mktemp)
-      write_managed_block > "$TEMPLATE_FILE"
+# Earlier versions put the pointer in CLAUDE.md. It now lives in AGENTS.md, so
+# drop the CLAUDE.md copy (marker + the line below it) instead of keeping two.
+#   $1 = file to remove the pointer from
+remove_version_guide_pointer() {
+  local md="$1"
+  [[ -f "$md" ]] && grep -qF "$VERSION_GUIDE_POINTER_MARKER" "$md" || return 0
 
-      awk -v start="$START_MARKER" -v end="$END_MARKER" -v tmpl="$TEMPLATE_FILE" '
-        $0 == start {
-          while ((getline line < tmpl) > 0) print line
-          close(tmpl)
-          skip = 1
-          next
-        }
-        $0 == end {
-          skip = 0
-          next
-        }
-        !skip { print }
-      ' "$TARGET_DIR/CLAUDE.md" > "$TEMP_FILE"
-
-      mv "$TEMP_FILE" "$TARGET_DIR/CLAUDE.md"
-      rm -f "$TEMPLATE_FILE"
-      log_installed "CLAUDE.md (updated managed rules)"
-    fi
-    INSTALLED=$((INSTALLED + 1))
-
-  elif grep -qF "$OLD_MARKER" "$TARGET_DIR/CLAUDE.md"; then
-    # ── Old single marker: migrate to new dual-marker format ─────────
-    if [[ "$DRY_RUN" == true ]]; then
-      log_installed "CLAUDE.md (migrated to managed markers) (dry-run)"
-    else
-      TEMP_FILE=$(mktemp)
-
-      # Keep everything BEFORE the old marker.
-      sed -n "/$OLD_MARKER/q;p" "$TARGET_DIR/CLAUDE.md" > "$TEMP_FILE"
-
-      # Append new managed block + project scaffold.
-      {
-        echo ""
-        write_managed_block
-        echo "$PROJECT_SCAFFOLD"
-      } >> "$TEMP_FILE"
-
-      mv "$TEMP_FILE" "$TARGET_DIR/CLAUDE.md"
-      log_installed "CLAUDE.md (migrated to managed markers)"
-      echo "  ${YELLOW}⚠ Old Drupal rules replaced. If you customized the Custom Modules or" >&2
-      echo "    Contrib Modules sections, re-add them from git diff.${RESET}" >&2
-    fi
-    INSTALLED=$((INSTALLED + 1))
-
-  else
-    # ── No markers: append managed block + project scaffold ──────────
-    if [[ "$DRY_RUN" == true ]]; then
-      log_installed "CLAUDE.md (appended Drupal rules) (dry-run)"
-    else
-      {
-        echo ""
-        write_managed_block
-        echo "$PROJECT_SCAFFOLD"
-      } >> "$TARGET_DIR/CLAUDE.md"
-      log_installed "CLAUDE.md (appended Drupal rules)"
-    fi
-    INSTALLED=$((INSTALLED + 1))
-  fi
-else
-  # ── No CLAUDE.md: create from scratch ────────────────────────────────
   if [[ "$DRY_RUN" == true ]]; then
-    log_installed "CLAUDE.md (created with Drupal rules) (dry-run)"
-  else
-    {
-      echo "# CLAUDE.md"
-      echo ""
-      write_managed_block
-      echo "$PROJECT_SCAFFOLD"
-    } > "$TARGET_DIR/CLAUDE.md"
-    log_installed "CLAUDE.md (created with Drupal rules)"
+    log_note "would move version-guide pointer to AGENTS.md (dry-run)"
+    return 0
   fi
-  INSTALLED=$((INSTALLED + 1))
-fi
 
-# Inject (or refresh) the one-line pointer to the per-version Drupal guide
-# that Phase 7f renders. This extends the CLAUDE.md merge step — it must
-# stay attached to Phase 3 so the pointer exists regardless of detection.
-ensure_version_guide_pointer
+  local tmp
+  tmp=$(mktemp)
+  awk -v marker="$VERSION_GUIDE_POINTER_MARKER" '
+    $0 == marker { getline _drop; next }
+    { print }
+  ' "$md" > "$tmp"
+  mv "$tmp" "$md"
+  log_note "moved version-guide pointer to AGENTS.md"
+}
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Phase 3b — Emit AGENTS.md for non-Claude agents (Cursor, Codex, Gemini, …)
-# ═══════════════════════════════════════════════════════════════════════════
-# AGENTS.md is the cross-agent instruction file convention. It carries the same
-# agent-agnostic Drupal rules and knowledge-file index as CLAUDE.md's managed
-# block, minus the Claude-specific Skill-tool routing (replaced by a pointer to
-# read the SKILL.md files as plain docs). Rendered from the same template.
-echo ""
-echo "${BOLD}Phase 3b: AGENTS.md${RESET}"
+# Which file holds the project sections (Custom Modules, Lessons, …)? New
+# installs put them in AGENTS.md. Projects set up before AGENTS.md became
+# canonical already have them in CLAUDE.md; those stay where the team edited
+# them. An old single-marker CLAUDE.md doesn't count: its migration below
+# drops everything after the marker, sections included.
+project_sections_file() {
+  local f
+  for f in "$TARGET_DIR/AGENTS.md" "$TARGET_DIR/CLAUDE.md"; do
+    [[ -f "$f" ]] || continue
+    if [[ "$f" == "$TARGET_DIR/CLAUDE.md" ]] \
+      && ! grep -qF "$START_MARKER" "$f" && grep -qF "$OLD_MARKER" "$f"; then
+      continue
+    fi
+    if grep -q '^## Custom Modules' "$f"; then
+      echo "$f"
+      return 0
+    fi
+  done
+  return 0
+}
+PROJECT_MD="$(project_sections_file)"
 
 AGENTS_HEADER="# AGENTS.md
 
-Cross-agent instructions for this Drupal project. Claude Code reads \`CLAUDE.md\`;
-this file is for other AI coding agents (Cursor, Codex, Gemini CLI, Copilot, …).
-The block below is managed by drupal-agentic-workflow and refreshed on re-run —
-add your own project notes outside the markers."
+Instructions for AI coding agents working on this Drupal project (Claude Code,
+Cursor, Codex, Gemini CLI, Copilot, …). Claude Code loads this file through the
+\`@AGENTS.md\` import in \`CLAUDE.md\`. The block below is managed by
+drupal-agentic-workflow and refreshed on re-run — add your own project notes
+outside the markers."
 
 upsert_managed_block \
   "$TARGET_DIR/AGENTS.md" \
   "$AGENTS_CONTENT" \
   "AGENTS.md" \
   "$AGENTS_HEADER"
+
+if [[ -z "$PROJECT_MD" ]]; then
+  PROJECT_MD="$TARGET_DIR/AGENTS.md"
+  if [[ "$DRY_RUN" == true ]]; then
+    log_note "would add project sections (dry-run)"
+  else
+    echo "$PROJECT_SCAFFOLD" >> "$PROJECT_MD"
+    log_note "added project sections (Custom Modules, Lessons, …)"
+  fi
+fi
+
+# Inject (or refresh) the one-line pointer to the per-version Drupal guide
+# that Phase 7f renders. This extends the AGENTS.md merge step — it must
+# stay attached to Phase 3 so the pointer exists regardless of detection.
+ensure_version_guide_pointer "$TARGET_DIR/AGENTS.md"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 3b — CLAUDE.md: import AGENTS.md + Claude-only additions
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "${BOLD}Phase 3b: CLAUDE.md${RESET}"
+
+if [[ -f "$TARGET_DIR/CLAUDE.md" ]] \
+  && ! grep -qF "$START_MARKER" "$TARGET_DIR/CLAUDE.md" \
+  && grep -qF "$OLD_MARKER" "$TARGET_DIR/CLAUDE.md"; then
+  # ── Old single marker: migrate to new dual-marker format ─────────
+  if [[ "$DRY_RUN" == true ]]; then
+    log_installed "CLAUDE.md (migrated to managed markers) (dry-run)"
+  else
+    TEMP_FILE=$(mktemp)
+
+    # Keep everything BEFORE the old marker.
+    sed -n "/$OLD_MARKER/q;p" "$TARGET_DIR/CLAUDE.md" > "$TEMP_FILE"
+
+    # Append the new managed block; project sections now live in AGENTS.md.
+    {
+      echo ""
+      write_managed_block
+    } >> "$TEMP_FILE"
+
+    mv "$TEMP_FILE" "$TARGET_DIR/CLAUDE.md"
+    log_installed "CLAUDE.md (migrated to managed markers)"
+    echo "  ${YELLOW}⚠ Old Drupal rules replaced. If you customized the Custom Modules or" >&2
+    echo "    Contrib Modules sections, re-add them to AGENTS.md from git diff.${RESET}" >&2
+  fi
+  INSTALLED=$((INSTALLED + 1))
+else
+  upsert_managed_block \
+    "$TARGET_DIR/CLAUDE.md" \
+    "$CLAUDE_CONTENT" \
+    "CLAUDE.md" \
+    "# CLAUDE.md"
+fi
+
+remove_version_guide_pointer "$TARGET_DIR/CLAUDE.md"
+
+if [[ "$PROJECT_MD" == "$TARGET_DIR/CLAUDE.md" ]]; then
+  log_note "project sections stay in CLAUDE.md — move them to AGENTS.md to share them with other agents"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase 4 — Install .prettierrc.json (if missing)
@@ -1077,7 +1091,7 @@ echo ""
 echo "${BOLD}Phase 5: AI_CONTEXT.md for custom modules${RESET}"
 
 CUSTOM_MODULES_DIR="$TARGET_DIR/web/modules/custom"
-# Track discovered modules for Phase 6 (CLAUDE.md Custom Modules section).
+# Track discovered modules for Phase 6 (Custom Modules section).
 DISCOVERED_MODULES=()
 
 # ---------------------------------------------------------------------------
@@ -1374,12 +1388,15 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 6 — Update CLAUDE.md Custom Modules section with discovered modules
+# Phase 6 — Update the Custom Modules section with discovered modules
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "${BOLD}Phase 6: Updating CLAUDE.md Custom Modules listing${RESET}"
+echo "${BOLD}Phase 6: Updating Custom Modules listing${RESET}"
 
-if [[ ${#DISCOVERED_MODULES[@]} -gt 0 && -f "$TARGET_DIR/CLAUDE.md" ]]; then
+# PROJECT_MD is set in Phase 3: AGENTS.md, or CLAUDE.md in older installs.
+PROJECT_MD_LABEL="${PROJECT_MD#"$TARGET_DIR"/}"
+
+if [[ ${#DISCOVERED_MODULES[@]} -gt 0 && -f "$PROJECT_MD" ]]; then
   # Build the module listing.
   MODULE_LISTING=""
   for mod in "${DISCOVERED_MODULES[@]}"; do
@@ -1399,9 +1416,9 @@ if [[ ${#DISCOVERED_MODULES[@]} -gt 0 && -f "$TARGET_DIR/CLAUDE.md" ]]; then
   done
 
   # Check if the Custom Modules section has the placeholder comment.
-  if grep -qF '<!-- List your custom modules here.' "$TARGET_DIR/CLAUDE.md"; then
+  if grep -qF '<!-- List your custom modules here.' "$PROJECT_MD"; then
     if [[ "$DRY_RUN" == true ]]; then
-      log_installed "CLAUDE.md (Custom Modules listing) (dry-run)"
+      log_installed "$PROJECT_MD_LABEL (Custom Modules listing) (dry-run)"
     else
       # Replace the placeholder comment block with the actual module listing.
       TEMP_FILE=$(mktemp)
@@ -1415,17 +1432,17 @@ if [[ ${#DISCOVERED_MODULES[@]} -gt 0 && -f "$TARGET_DIR/CLAUDE.md" ]]; then
           next
         }
         { print }
-      ' "$TARGET_DIR/CLAUDE.md" > "$TEMP_FILE"
-      mv "$TEMP_FILE" "$TARGET_DIR/CLAUDE.md"
+      ' "$PROJECT_MD" > "$TEMP_FILE"
+      mv "$TEMP_FILE" "$PROJECT_MD"
       rm -f "$LISTING_FILE"
-      log_installed "CLAUDE.md (Custom Modules listing)"
+      log_installed "$PROJECT_MD_LABEL (Custom Modules listing)"
     fi
     INSTALLED=$((INSTALLED + 1))
   else
     echo "  ${GRAY}Custom Modules section already customized — not overwriting${RESET}"
   fi
 else
-  echo "  ${GRAY}No modules to list or CLAUDE.md not found — skipping${RESET}"
+  echo "  ${GRAY}No modules to list or project sections file not found — skipping${RESET}"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2053,15 +2070,15 @@ fi
 
 # Prompts the agent should run. Kept as parallel arrays so they're easy to maintain.
 FOLLOWUP_LABELS=(
-  "Fill in CLAUDE.md project details"
-  "Verify the auto-populated 'Custom Modules' descriptions in CLAUDE.md"
-  "Populate the 'Installed Contributed Modules/Themes' section in CLAUDE.md"
+  "Fill in AGENTS.md project details"
+  "Verify the auto-populated 'Custom Modules' descriptions in AGENTS.md"
+  "Populate the 'Installed Contributed Modules/Themes' section in AGENTS.md"
   "Review per-module AI_CONTEXT.md files"
 )
 FOLLOWUP_PROMPTS=(
-  "Review CLAUDE.md in this project and fill in any TODO or placeholder sections (project overview, architecture description, environment notes). Use .claude/stack.json, .claude/project-map.md, and .claude/conventions.md as ground truth. Do not modify the managed block between the drupal-agentic-workflow:start and drupal-agentic-workflow:end markers — only edit content outside of it."
-  "Review the 'Custom Modules' section in CLAUDE.md. For each listed module, verify the one-line description matches what the module actually does. Cross-reference with .claude/project-map.md (services, routes per module) and each module's AI_CONTEXT.md if present. Update descriptions where they are missing, vague, or misleading."
-  "Populate the 'Installed Contributed Modules/Themes' section in CLAUDE.md from composer.json. For each drupal/* dependency (excluding core and core-* packages), list the package name with version constraint and a one-line summary of its purpose. Group by category if there are many (admin, content, search, performance, etc.). Skip drupal/core, drupal/core-*, and dev-only packages."
+  "Review AGENTS.md in this project and fill in any TODO or placeholder sections (project overview, architecture description, environment notes). Use .claude/stack.json, .claude/project-map.md, and .claude/conventions.md as ground truth. Do not modify the managed block between the drupal-agentic-workflow:start and drupal-agentic-workflow:end markers — only edit content outside of it."
+  "Review the 'Custom Modules' section in AGENTS.md (or CLAUDE.md in older setups). For each listed module, verify the one-line description matches what the module actually does. Cross-reference with .claude/project-map.md (services, routes per module) and each module's AI_CONTEXT.md if present. Update descriptions where they are missing, vague, or misleading."
+  "Populate the 'Installed Contributed Modules/Themes' section in AGENTS.md (or CLAUDE.md in older setups) from composer.json. For each drupal/* dependency (excluding core and core-* packages), list the package name with version constraint and a one-line summary of its purpose. Group by category if there are many (admin, content, search, performance, etc.). Skip drupal/core, drupal/core-*, and dev-only packages."
   "For each web/modules/custom/*/AI_CONTEXT.md file, review the auto-generated content against the actual module code. The 'Key Files', 'Hooks', 'Routes', and 'Services' tables were extracted automatically — keep them intact. Append a 'Domain notes' section to each where you can capture: business logic the agent should know, integration touchpoints, gotchas, and any non-obvious behavior."
 )
 

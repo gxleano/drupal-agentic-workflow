@@ -80,16 +80,18 @@ for tool in jq prettier; do
 done
 ```
 
-### 6. CLAUDE.md Health
+### 6. AGENTS.md / CLAUDE.md Health
 
-Check these conditions:
+`AGENTS.md` holds the shared rules and project sections; `CLAUDE.md` imports it. Check these conditions:
 
 | Check | How |
 |-------|-----|
-| File exists | `test -f CLAUDE.md` |
-| Has managed markers | `grep -q 'drupal-agentic-workflow:start' CLAUDE.md` |
-| Custom Modules populated | NOT just a `<!-- List your custom modules` comment |
-| Contributed Modules populated | NOT just a `<!-- List your installed contrib` comment |
+| AGENTS.md exists | `test -f AGENTS.md` |
+| AGENTS.md has managed markers | `grep -q 'drupal-agentic-workflow:start' AGENTS.md` |
+| CLAUDE.md exists | `test -f CLAUDE.md` |
+| CLAUDE.md imports AGENTS.md | `grep -qx '@AGENTS.md' CLAUDE.md` |
+| Custom Modules populated | In `AGENTS.md` (or `CLAUDE.md` in older setups): NOT just a `<!-- List your custom modules` comment |
+| Contributed Modules populated | In `AGENTS.md` (or `CLAUDE.md` in older setups): NOT just a `<!-- List your installed contrib` comment |
 
 **Fix:** Re-run setup.sh or manually fill in the sections.
 
