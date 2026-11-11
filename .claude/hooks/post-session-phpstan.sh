@@ -104,6 +104,18 @@ if [[ "$CONTEXT" == "site" ]]; then
   CHANGED_FILES=$(echo "$CHANGED_FILES" | grep -E '^web/modules/custom/' || true)
 fi
 
+# Only what Claude wrote or edited in this session (the lint hook keeps the
+# list): uncommitted work of someone else would come back on every turn.
+# Without a session id (an older Claude Code, a manual run) every changed file
+# counts. Edits made through shell commands are not on the list.
+EDITS_FILE=$(session_edits_file "$INPUT")
+if [[ -n "$EDITS_FILE" ]]; then
+  if [[ ! -f "$EDITS_FILE" ]]; then
+    exit 0
+  fi
+  CHANGED_FILES=$(grep -Fxf <(sort -u "$EDITS_FILE") <<< "$CHANGED_FILES" || true)
+fi
+
 if [[ -z "$CHANGED_FILES" ]]; then
   exit 0
 fi

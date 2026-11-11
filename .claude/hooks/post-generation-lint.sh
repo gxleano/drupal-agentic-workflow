@@ -40,6 +40,13 @@ fi
 # shellcheck source=lib/php-tools.sh
 source "$HOOK_LIB"
 
+# Remember the file for the PHPStan hook, which analyses only what Claude
+# changed in this session (see post-session-phpstan.sh).
+EDITS_FILE=$(session_edits_file "$INPUT")
+if [[ -n "$EDITS_FILE" && -f "$FILE_PATH" ]]; then
+  echo "${FILE_PATH#"$PROJECT_DIR"/}" >> "$EDITS_FILE" 2>/dev/null || true
+fi
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 ERRORS=0
 TOOLS_RUN=()

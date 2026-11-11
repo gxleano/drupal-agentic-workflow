@@ -187,6 +187,22 @@ out=$(echo '{"stop_hook_active": false}' | CLAUDE_PROJECT_DIR="$S" bash "$HOOKS/
 grep -qF "web/modules/custom/mine/src/New.php" <<< "$out" && ok "analyses new, untracked files" || bad "analyses new, untracked files"
 rm "$S/web/modules/custom/mine/src/New.php"
 
+# Session scope: only files the lint hook saw in this session are analysed.
+SID="test-session-$$"
+EDITS="${TMPDIR:-/tmp}/claude-daw-edits-$SID"
+rm -f "$EDITS"
+echo '<?php // changed again' > "$S/web/modules/custom/mine/src/C.php"
+rc=0; jq -cn --arg s "$SID" '{session_id: $s, stop_hook_active: false}' \
+  | CLAUDE_PROJECT_DIR="$S" bash "$HOOKS/post-session-phpstan.sh" >/dev/null 2>&1 || rc=$?
+[[ "$rc" -eq 0 ]] && ok "skips files Claude did not edit in the session" || bad "skips files Claude did not edit in the session (exit $rc)"
+jq -cn --arg f "$S/web/modules/custom/mine/src/C.php" --arg s "$SID" '{session_id: $s, tool_input: {file_path: $f}}' \
+  | CLAUDE_PROJECT_DIR="$S" bash "$HOOKS/post-generation-lint.sh" >/dev/null 2>&1 || true
+out=$(jq -cn --arg s "$SID" '{session_id: $s, stop_hook_active: false}' \
+  | CLAUDE_PROJECT_DIR="$S" bash "$HOOKS/post-session-phpstan.sh" 2>&1 >/dev/null || true)
+grep -qF "web/modules/custom/mine/src/C.php" <<< "$out" && ok "analyses a file Claude edited in the session" \
+  || bad "analyses a file Claude edited in the session"
+rm -f "$EDITS"
+
 fake_phpstan '$*' 1
 mkdir -p "$S/web/modules/custom/up/src"
 echo '<?php' > "$S/web/modules/custom/up/src/D.php"

@@ -237,3 +237,17 @@ core_js_available() {
   fi
   return 1
 }
+
+# The list of files Claude wrote or edited in one session: the lint hook adds
+# to it, the PHPStan hook reads it. Outside the project, so nothing lands in
+# git. Empty when the hook input has no session_id.
+#
+#   session_edits_file <hook input JSON>
+session_edits_file() {
+  local id
+  id=$(jq -r '.session_id // empty' <<< "$1" 2>/dev/null || true)
+  # Only safe characters in a file name.
+  id=$(tr -cd 'A-Za-z0-9_-' <<< "$id")
+  [[ -n "$id" ]] && echo "${TMPDIR:-/tmp}/claude-daw-edits-$id"
+  return 0
+}

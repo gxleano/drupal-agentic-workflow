@@ -77,7 +77,12 @@ phpcbf or Prettier.
 
 Runs `phpstan analyse` on PHP files changed in the working tree (under
 `web/modules/custom/` on a site; anywhere in a standalone module repo),
-including files changed inside git submodules. Uses
+including files changed inside git submodules and new, untracked files.
+Only the files Claude wrote or edited in the current session count: the lint
+hook keeps that list (in `$TMPDIR`, per `session_id`), so someone else's
+uncommitted work does not come back at every turn. Edits made through shell
+commands are not on the list; without a session id, every changed file
+counts. Uses
 the project's `phpstan.neon(.dist)`; a standalone repo without one gets a
 temporary level-1 config.
 
