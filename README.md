@@ -4,8 +4,12 @@ Checks that run, not context that goes stale. This installs into a Drupal
 project:
 
 - **Hooks** that Claude Code runs every time: a guard against destructive
-  commands and committed secrets, phpcbf/phpcs on every edited file, and
-  PHPStan when Claude finishes a turn. See `.claude/hooks/README.md`.
+  commands and committed secrets; phpcbf/phpcs, ESLint, Stylelint, Prettier
+  and cspell on every edited file; and PHPStan when Claude finishes a turn.
+  See `.claude/hooks/README.md`.
+- **The checks drupal.org's CI runs, working out of the box:** Coder and
+  PHPStan from Composer, and Drupal core's own ESLint, Stylelint, Prettier
+  and cspell with core's configs (installed by `yarn install` in core).
 - **A working `phpstan.neon`** that actually loads phpstan-drupal.
 - **`site-api.sh`**, which reads the running site's real service IDs,
   entity bundles, fields, routes and permissions on demand.
@@ -43,9 +47,18 @@ vendor/bin/daw install
 ```
 
 `install` checks for `drupal/coder`, `phpstan/phpstan`,
-`mglaman/phpstan-drupal`, `phpstan/phpstan-deprecation-rules` and
-`phpstan/extension-installer`, and offers to require the missing ones (DDEV
-when the project has it, host Composer otherwise).
+`mglaman/phpstan-drupal` and `phpstan/phpstan-deprecation-rules`, and offers
+to require the missing ones (DDEV when the project has it, host Composer
+otherwise). It offers to install Drupal core's JS dev tools (`yarn install`
+in core, Yarn 4 through corepack; in DDEV when the project has it), links
+`<docroot>/.prettierrc.json` to core's so Prettier agrees with drupal.org's
+CI, and offers to add the missing phpstan-drupal `includes` to an existing
+`phpstan.neon` that cannot load it. Every offer defaults to yes. The prompts read
+from the terminal; without one (a script) the answer is no unless you pass
+`--yes`.
+
+Core's `node_modules` goes when Composer updates core: run `daw install`
+again after a core update. The hooks say so when the tools are missing.
 
 `daw update` re-copies the hooks and the site-api tool without prompts.
 Neither command overwrites a file you changed (use `--force`), and neither
@@ -53,7 +66,8 @@ touches an existing AGENTS.md or CLAUDE.md. An existing
 `.claude/settings.json` is merged: the workflow's hooks are added next to the
 ones already there.
 
-Options: `--dry-run`, `--force`, `--skip-tools`.
+Options: `--dry-run`, `--force`, `--skip-tools`, `--yes` (accept every offer
+without asking, for scripts and CI).
 
 ## After installing
 

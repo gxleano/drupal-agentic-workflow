@@ -66,13 +66,13 @@ new_project "$DRUPAL" '{ "require": { "drupal/core-recommended": "^11" }, "requi
 "$DAW" install "$DRUPAL" --skip-tools >/dev/null
 has "$DRUPAL/phpstan.neon" "vendor/mglaman/phpstan-drupal/extension.neon" "includes phpstan-drupal when no extension installer"
 has "$DRUPAL/phpstan.neon" "phpstan-deprecation-rules/rules.neon"         "includes deprecation rules"
-has "$DRUPAL/phpstan.neon" "drupal_root: web"                             "sets drupal_root"
+hasnot "$DRUPAL/phpstan.neon" "drupal_root"                              "no deprecated drupal_root"
 
 INSTALLER="$TMP/with-installer"
 new_project "$INSTALLER" '{ "require": { "drupal/core-recommended": "^11" }, "require-dev": { "mglaman/phpstan-drupal": "^2", "phpstan/extension-installer": "^1" } }'
 "$DAW" install "$INSTALLER" --skip-tools >/dev/null
 hasnot "$INSTALLER/phpstan.neon" "includes:"            "no includes when the extension installer loads them"
-has    "$INSTALLER/phpstan.neon" "drupal_root: web"     "still sets drupal_root"
+hasnot "$INSTALLER/phpstan.neon" "drupal_root"          "no deprecated drupal_root either"
 
 BROKEN="$TMP/broken-neon"
 new_project "$BROKEN" '{ "require": { "drupal/core-recommended": "^11" }, "require-dev": { "mglaman/phpstan-drupal": "^2" } }'
@@ -80,6 +80,22 @@ printf 'parameters:\n  level: 2\n  drupal:\n    drupal_root: web\n' > "$BROKEN/p
 out=$("$DAW" install "$BROKEN" --skip-tools 2>&1 >/dev/null || true)
 grep -qF "nothing loads phpstan-drupal" <<< "$out" && ok "warns about an existing neon that cannot load phpstan-drupal" \
                                                || bad "warns about an existing neon that cannot load phpstan-drupal"
+
+echo "── core's Prettier config at the docroot ───────"
+PRETTY="$TMP/prettier"
+new_project "$PRETTY" '{ "require": { "drupal/core-recommended": "^11" } }'
+mkdir -p "$PRETTY/web/core"
+echo '{"singleQuote": true}' > "$PRETTY/web/core/.prettierrc.json"
+"$DAW" install "$PRETTY" --skip-tools >/dev/null
+[[ -L "$PRETTY/web/.prettierrc.json" && "$(readlink "$PRETTY/web/.prettierrc.json")" == "core/.prettierrc.json" ]] \
+  && ok "links web/.prettierrc.json to core's" || bad "links web/.prettierrc.json to core's"
+OWNP="$TMP/own-prettier"
+new_project "$OWNP" '{ "require": { "drupal/core-recommended": "^11" } }'
+mkdir -p "$OWNP/web/core"
+echo '{}' > "$OWNP/web/core/.prettierrc.json"
+echo '{"semi": false}' > "$OWNP/web/.prettierrc.json"
+"$DAW" install "$OWNP" --skip-tools >/dev/null
+[[ ! -L "$OWNP/web/.prettierrc.json" ]] && has "$OWNP/web/.prettierrc.json" '"semi": false' "keeps the project's own Prettier config"
 
 echo "── re-run leaves instruction files alone ───────"
 echo "Team-written line." >> "$PROJ/AGENTS.md"

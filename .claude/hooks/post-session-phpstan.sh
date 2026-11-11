@@ -76,19 +76,23 @@ CONTEXT=$(php_project_context "$PROJECT_DIR")
 # ── Collect changed PHP files (staged + unstaged) ────────────────────────────
 # Site context keeps the original web/modules/custom/ scope; a standalone repo
 # scans changed PHP anywhere (still excluding vendored/contrib/core code).
-# The project's own diff only shows that a submodule moved, not which of its
-# files changed, so each submodule's diff is read too, with its path in front.
+# New files count too: `git diff` leaves out untracked files, which is what a
+# freshly generated module is. The project's own diff only shows that a
+# submodule moved, not which of its files changed, so each submodule is read
+# too, with its path in front.
 submodule_changes() {
   [[ -f "$PROJECT_DIR/.gitmodules" ]] || return 0
   local path
   while IFS= read -r path; do
     [[ -n "$path" && -d "$PROJECT_DIR/$path" ]] || continue
-    git -C "$PROJECT_DIR/$path" diff --name-only HEAD 2>/dev/null | sed "s|^|$path/|" || true
+    { git -C "$PROJECT_DIR/$path" diff --name-only HEAD 2>/dev/null
+      git -C "$PROJECT_DIR/$path" ls-files --others --exclude-standard 2>/dev/null; } | sed "s|^|$path/|" || true
   done < <(git config -f "$PROJECT_DIR/.gitmodules" --get-regexp '\.path$' 2>/dev/null | awk '{print $2}')
 }
 CHANGED_FILES=$(
   { git -C "$PROJECT_DIR" diff --name-only HEAD 2>/dev/null
     git -C "$PROJECT_DIR" diff --name-only 2>/dev/null
+    git -C "$PROJECT_DIR" ls-files --others --exclude-standard 2>/dev/null
     submodule_changes; } \
   | sort -u \
   | grep -E '\.(php|module|theme|install|inc|profile|test)$' \

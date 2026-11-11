@@ -32,6 +32,21 @@ _php_tools_composer_bin_dirs() {
 # false and let the caller fall back to a local binary.)
 php_ddev_available() {
   local project_dir="$1"
+  # `ddev describe` takes a moment: asked once per hook run.
+  if [[ -n "${_PHP_TOOLS_DDEV_UP:-}" ]]; then
+    [[ "$_PHP_TOOLS_DDEV_UP" == yes ]]
+    return
+  fi
+  _PHP_TOOLS_DDEV_UP=no
+  if _php_tools_ddev_running "$project_dir"; then
+    _PHP_TOOLS_DDEV_UP=yes
+    return 0
+  fi
+  return 1
+}
+
+_php_tools_ddev_running() {
+  local project_dir="$1"
   # `ddev status` prints a table whose wording changed across releases (v1.25
   # says "OK"); `describe -j` reports the state as data.
   command -v ddev &>/dev/null \
@@ -170,5 +185,55 @@ php_find_phpstan_drupal() {
       return 0
     fi
   done
+  return 1
+}
+
+# The docroot relative to the project root: "web" for
+# drupal/recommended-project, "." when core sits at the root. Fails when the
+# project has no Drupal core checked out (a standalone module repo).
+#
+#   drupal_web_root <project_dir>
+drupal_web_root() {
+  local project_dir="$1" root=""
+  if [[ -f "$project_dir/composer.json" ]] && command -v jq &>/dev/null; then
+    root=$(jq -r '.extra["drupal-scaffold"].locations["web-root"] // empty' "$project_dir/composer.json" 2>/dev/null || true)
+    root="${root%/}"
+    root="${root#./}"
+  fi
+  if [[ -n "$root" && -d "$project_dir/$root/core" ]]; then
+    echo "$root"
+  elif [[ -d "$project_dir/web/core" ]]; then
+    echo "web"
+  elif [[ -d "$project_dir/core" ]]; then
+    echo "."
+  else
+    return 1
+  fi
+}
+
+# Drupal core's own JavaScript dev tools (ESLint, Stylelint, Prettier, cspell),
+# the ones drupal.org's GitLab CI runs, installed by `yarn install` in core.
+# On success sets CORE_JS_RUNNER ("ddev exec", or empty for the host) and
+# CORE_DIR (core's path relative to the project root, e.g. "web/core").
+#
+#   core_js_available <project_dir>
+core_js_available() {
+  local project_dir="$1" web
+  CORE_JS_RUNNER=""
+  CORE_DIR=""
+  web=$(drupal_web_root "$project_dir") || return 1
+  CORE_DIR="$web/core"
+  CORE_DIR="${CORE_DIR#./}"
+  [[ -f "$project_dir/$CORE_DIR/package.json" ]] || return 1
+  # Under DDEV the tools live in the container: with Mutagen, node_modules may
+  # never reach the host.
+  if php_ddev_available "$project_dir" \
+      && (cd "$project_dir" && ddev exec test -x "$CORE_DIR/node_modules/.bin/eslint") >/dev/null 2>&1; then
+    CORE_JS_RUNNER="ddev exec"
+    return 0
+  fi
+  if [[ -x "$project_dir/$CORE_DIR/node_modules/.bin/eslint" ]] && command -v node &>/dev/null; then
+    return 0
+  fi
   return 1
 }

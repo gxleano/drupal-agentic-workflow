@@ -49,11 +49,20 @@ Runs on the file Claude just wrote or edited:
   `Drupal,DrupalPractice`. When phpcbf rewrote the file and phpcs is clean,
   Claude gets a note (as context, exit 0) to re-read the file before editing
   it again.
-- **JS/TS**: Prettier, then ESLint. **CSS/SCSS**: Prettier, then Stylelint.
-  ESLint and Stylelint run only where a config file sits between the file and
-  the project root, and a linter that cannot load its config (ESLint 9+ with
-  core's `.eslintrc.json`) is reported, not sent back as a code error. Tools
-  run through `npx --no-install`, so nothing is downloaded.
+- **Inside the docroot, with Drupal core's JS tools installed** (`daw
+  install` runs `yarn install` in core): core's own Prettier, ESLint,
+  Stylelint and cspell, configured the way drupal.org's GitLab CI runs them —
+  ESLint with `core/.eslintrc.passing.json`, Stylelint with
+  `core/.stylelintrc.json`, Prettier with `core/.prettierrc.json`, and cspell
+  with gitlab_templates' default config (built-in and core dictionaries,
+  flagged words, the machine-name parts of the module's `.info.yml` files,
+  the module's own `.cspell.json` and `.cspell-project-words.txt`). A config
+  of the project's own below the docroot wins over core's. Under DDEV they
+  run in the container.
+- **Elsewhere, or without core's tools**: the project's own Prettier, ESLint
+  and Stylelint (`npx --no-install`, so nothing is downloaded), only where a
+  config file sits between the file and the project root. A linter that
+  cannot load its config is reported, not sent back as a code error.
 - **Twig/YAML/JSON**: Prettier. Drupal config and definition YAML is never
   reformatted (`drush cex` would undo it).
 

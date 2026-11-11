@@ -7,6 +7,7 @@
 #   --force       Skip Drupal project detection; overwrite customized files
 #   --dry-run     Show what would be done without making changes
 #   --skip-tools  Skip code quality tools detection/installation
+#   --yes, -y     Accept every offer without asking (scripts, CI)
 #   --help        Show this help message
 #
 # Phases:
@@ -75,6 +76,7 @@ SKIPPED=0
 # ---------------------------------------------------------------------------
 TARGET_DIR=""
 FORCE=false
+ASSUME_YES=false
 DRY_RUN=false
 SKIP_TOOLS=false
 
@@ -94,6 +96,7 @@ Options:
   --force       Skip Drupal project detection; overwrite customized files
   --dry-run     Show what would be done without making changes
   --skip-tools  Skip code quality tools detection/installation
+  --yes, -y     Accept every offer without asking (scripts, CI)
   --help        Show this help message
 
 Phases:
@@ -121,6 +124,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-tools)
       SKIP_TOOLS=true
+      shift
+      ;;
+    --yes|-y)
+      ASSUME_YES=true
       shift
       ;;
     --help|-h)
@@ -173,6 +180,17 @@ log_skipped() {
 
 warn() {
   echo "  ${YELLOW}⚠${RESET} $*" >&2
+}
+
+# Reads the answer to a prompt into REPLY: "y" with --yes, else from the
+# terminal ("n" when there is none, so a script never installs by accident).
+read_reply() {
+  if [[ "$ASSUME_YES" == true ]]; then
+    REPLY="y"
+    echo "y"
+  else
+    read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -282,7 +300,7 @@ allow_composer_plugin() {
   fi
   echo "  ${YELLOW}⚠ Composer plugin not allow-listed: $plugin${RESET}"
   echo -n "  Allow it? [Y/n] "
-  read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
+  read_reply
   if [[ "$REPLY" =~ ^[Yy]?$ ]]; then
     if "${COMPOSER_RUN[@]}" config --no-plugins "allow-plugins.$plugin" true 2>&1 | sed 's/^/    /'; then
       echo "  ${GREEN}✓ allowed $plugin${RESET}"
@@ -313,7 +331,7 @@ offer_require() {
     pattern='^[Yy]$'
   fi
   echo -n "  Install via $COMPOSER_HINT require --dev? $prompt "
-  read -r REPLY < /dev/tty 2>/dev/null || REPLY="n"
+  read_reply
   if [[ "$REPLY" =~ $pattern ]]; then
     if "${COMPOSER_RUN[@]}" require --dev "$@" 2>&1 | sed 's/^/    /'; then
       echo "  ${GREEN}✓ installed${RESET}"
@@ -383,7 +401,8 @@ else
   # drupal/coder pulls in the phpcs installer plugin; phpstan's extension
   # installer is a plugin too. Both must be allow-listed before any require.
   allow_composer_plugin "dealerdirect/phpcodesniffer-composer-installer"
-  allow_composer_plugin "phpstan/extension-installer"
+  # Only when the project uses it already (setup does not need it).
+  composer_has "phpstan/extension-installer" && allow_composer_plugin "phpstan/extension-installer"
 
   MISSING_REQUIRED=()
   MISSING_RECOMMENDED=()
@@ -393,14 +412,15 @@ else
     MISSING_REQUIRED+=("drupal/coder")
     echo "  ${YELLOW}✗ drupal/coder${RESET} — required for phpcs Drupal/DrupalPractice standards"
   fi
-  # The extension installer is what loads phpstan-drupal and the deprecation
-  # rules; without it the "drupal:" parameters in phpstan.neon are rejected.
-  for pkg in phpstan/phpstan mglaman/phpstan-drupal phpstan/phpstan-deprecation-rules phpstan/extension-installer; do
+  # phpstan.neon includes phpstan-drupal and the deprecation rules itself, so
+  # phpstan/extension-installer is not needed (with it, setup leaves the
+  # includes out; with both, the extension would load twice).
+  for pkg in phpstan/phpstan mglaman/phpstan-drupal phpstan/phpstan-deprecation-rules; do
     if composer_has "$pkg"; then
       echo "  ${GREEN}✓ $pkg${RESET}"
     else
       MISSING_RECOMMENDED+=("$pkg")
-      echo "  ${GRAY}○ $pkg${RESET} (recommended)"
+      echo "  ${GRAY}○ $pkg${RESET} (for the PHPStan hook)"
     fi
   done
 
@@ -408,7 +428,51 @@ else
     offer_require "required" Y "${MISSING_REQUIRED[@]}"
   fi
   if [[ ${#MISSING_RECOMMENDED[@]} -gt 0 ]]; then
-    offer_require "recommended" N "${MISSING_RECOMMENDED[@]}"
+    # Default yes: without them the PHPStan hook has nothing to run.
+    offer_require "PHPStan" Y "${MISSING_RECOMMENDED[@]}"
+  fi
+
+  # --- Drupal core's JS dev tools -------------------------------------------
+  # ESLint, Stylelint, Prettier and cspell as drupal.org's GitLab CI runs
+  # them: core's own, from `yarn install` in core (Yarn 4 through corepack).
+  # They land in core/node_modules, which Composer replaces when core is
+  # updated: run `daw install` again after a core update.
+  CORE_PKG="$TARGET_DIR/$WEB_ROOT/core/package.json"
+  CORE_REL="$WEB_ROOT/core"
+  CORE_REL="${CORE_REL#./}"
+  echo ""
+  if [[ ! -f "$CORE_PKG" ]]; then
+    echo "  ${GRAY}○ Drupal core's JS tools: no $CORE_REL/package.json (core not installed yet?)${RESET}"
+  elif [[ -x "$TARGET_DIR/$CORE_REL/node_modules/.bin/eslint" ]] \
+      || { [[ "${COMPOSER_RUN[0]}" == ddev ]] \
+           && (cd "$TARGET_DIR" && ddev exec test -x "$CORE_REL/node_modules/.bin/eslint") >/dev/null 2>&1; }; then
+    echo "  ${GREEN}✓ Drupal core's JS tools${RESET} (ESLint, Stylelint, Prettier, cspell)"
+  elif [[ "$DRY_RUN" == true ]]; then
+    echo "  ${GRAY}(dry-run) Would offer to install Drupal core's JS tools (yarn install in $CORE_REL)${RESET}"
+  else
+    YARN_CMD="cd $CORE_REL && COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack yarn install --immutable"
+    echo "  ${YELLOW}✗ Drupal core's JS tools${RESET} — ESLint, Stylelint, Prettier and cspell for the hooks"
+    echo -n "  Install them (yarn install in $CORE_REL)? [Y/n] "
+    read_reply
+    if [[ "$REPLY" =~ ^[Yy]?$ ]]; then
+      if [[ "${COMPOSER_RUN[0]}" == ddev ]]; then
+        JS_INSTALL=(ddev exec "$YARN_CMD")
+      elif command -v corepack &>/dev/null; then
+        JS_INSTALL=(bash -c "cd \"$TARGET_DIR\" && $YARN_CMD")
+      else
+        JS_INSTALL=()
+        warn "corepack not found (it ships with Node.js 16.9–24). Install Node, then: $YARN_CMD"
+      fi
+      if [[ ${#JS_INSTALL[@]} -gt 0 ]]; then
+        if (cd "$TARGET_DIR" && "${JS_INSTALL[@]}") 2>&1 | tail -n 3 | sed 's/^/    /'; then
+          echo "  ${GREEN}✓ Drupal core's JS tools installed${RESET}"
+        else
+          warn "Installation failed — run manually: $YARN_CMD"
+        fi
+      fi
+    else
+      echo "  ${GRAY}Skipped. The hooks then lint JS and CSS only where the project has its own tools.${RESET}"
+    fi
   fi
 fi
 
@@ -425,12 +489,26 @@ if [[ -f "$PHPSTAN_NEON" || -f "$TARGET_DIR/phpstan.neon.dist" ]]; then
       && ! grep -q 'phpstan-drupal' "$EXISTING_NEON" \
       && ! composer_has "phpstan/extension-installer"; then
     warn "${EXISTING_NEON##*/} sets drupal: parameters but nothing loads phpstan-drupal."
-    echo "    PHPStan will fail with \"Unexpected item 'parameters › drupal'\". Fix with either:"
-    echo "      composer require --dev phpstan/extension-installer"
-    echo "    or add to ${EXISTING_NEON##*/}:"
-    echo "      includes:"
-    echo "        - vendor/mglaman/phpstan-drupal/extension.neon"
-    echo "        - vendor/mglaman/phpstan-drupal/rules.neon"
+    echo "    PHPStan fails with \"Unexpected item 'parameters › drupal'\" until it does."
+    NEON_FIX=("vendor/mglaman/phpstan-drupal/extension.neon" "vendor/mglaman/phpstan-drupal/rules.neon")
+    composer_has "phpstan/phpstan-deprecation-rules" && NEON_FIX+=("vendor/phpstan/phpstan-deprecation-rules/rules.neon")
+    REPLY="n"
+    if [[ "$DRY_RUN" == true ]]; then
+      echo "    ${GRAY}(dry-run) Would offer to add includes: ${NEON_FIX[*]}${RESET}"
+    elif [[ "$SKIP_TOOLS" != true ]] && ! grep -q '^includes:' "$EXISTING_NEON"; then
+      echo -n "    Add the includes to ${EXISTING_NEON##*/}? [Y/n] "
+      read_reply
+    fi
+    if [[ "$REPLY" =~ ^[Yy]?$ && "$DRY_RUN" != true ]]; then
+      { echo "includes:"; printf '  - %s\n' "${NEON_FIX[@]}"; echo ""; cat "$EXISTING_NEON"; } > "$EXISTING_NEON.tmp"
+      mv "$EXISTING_NEON.tmp" "$EXISTING_NEON"
+      echo "    ${GREEN}✓ includes added${RESET}"
+    elif [[ "$DRY_RUN" != true ]]; then
+      echo "    Fix: add to ${EXISTING_NEON##*/}:"
+      echo "      includes:"
+      printf '        - %s\n' "${NEON_FIX[@]}"
+      echo "    or: composer require --dev phpstan/extension-installer"
+    fi
   fi
 else
   NEON_INCLUDES=()
@@ -456,10 +534,6 @@ else
       echo "  level: 2"
       echo "  paths:"
       echo "    - $WEB_ROOT/modules/custom"
-      if composer_has "mglaman/phpstan-drupal"; then
-        echo "  drupal:"
-        echo "    drupal_root: $WEB_ROOT"
-      fi
     } > "$PHPSTAN_NEON"
     log_installed "phpstan.neon"
   fi
@@ -482,6 +556,29 @@ done
 install_file "$TEMPLATE_DIR/.claude/hooks/lib/php-tools.sh" "$TARGET_DIR/.claude/hooks/lib/php-tools.sh"
 install_file "$TEMPLATE_DIR/.claude/hooks/README.md" "$TARGET_DIR/.claude/hooks/README.md"
 
+
+# Core's Prettier config at the docroot, as a link so it follows core updates.
+# Prettier, and the Prettier rules inside core's ESLint and Stylelint configs,
+# look for it from the edited file upward; without it they find whatever sits
+# at the project root and disagree with drupal.org's CI.
+DOCROOT_DIR="$TARGET_DIR/$WEB_ROOT"
+DOCROOT_DIR="${DOCROOT_DIR%/.}"
+if [[ -f "$DOCROOT_DIR/core/.prettierrc.json" ]]; then
+  if [[ -L "$DOCROOT_DIR/.prettierrc.json" && "$(readlink "$DOCROOT_DIR/.prettierrc.json")" == "core/.prettierrc.json" ]]; then
+    log_up_to_date "${WEB_ROOT}/.prettierrc.json → core/.prettierrc.json"
+    UP_TO_DATE=$((UP_TO_DATE + 1))
+  elif compgen -G "$DOCROOT_DIR/.prettierrc*" >/dev/null || compgen -G "$DOCROOT_DIR/prettier.config.*" >/dev/null; then
+    log_up_to_date "${WEB_ROOT}/.prettierrc (the project's own, left as is)"
+    UP_TO_DATE=$((UP_TO_DATE + 1))
+  elif [[ "$DRY_RUN" == true ]]; then
+    log_installed "${WEB_ROOT}/.prettierrc.json → core/.prettierrc.json (dry-run)"
+    INSTALLED=$((INSTALLED + 1))
+  else
+    ln -s core/.prettierrc.json "$DOCROOT_DIR/.prettierrc.json"
+    log_installed "${WEB_ROOT}/.prettierrc.json → core/.prettierrc.json"
+    INSTALLED=$((INSTALLED + 1))
+  fi
+fi
 
 # site-api reads the running site on demand. It is installed, not run: a
 # snapshot taken at setup time is stale after the next module or field change.

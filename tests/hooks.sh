@@ -98,6 +98,63 @@ lint "$L/web/modules/custom/mine/src/B.php" "$NOLIB"
 [[ "$rc" -eq 2 ]] && grep -qF "is missing" "$L/err" \
   && ok "lint says so when lib/ is missing" || bad "lint says so when lib/ is missing (exit $rc)"
 
+echo "── post-generation-lint: Drupal core's JS tools ─"
+C="$TMP/corejs"
+CB="$C/web/core/node_modules/.bin"
+mkdir -p "$CB" "$C/web/modules/custom/my_mod/js" "$C/web/modules/custom/my_mod/css" "$C/web/modules/custom/own/js"
+echo '{}' > "$C/web/core/package.json"
+for f in .eslintrc.passing.json .stylelintrc.json .prettierrc.json .cspell.json; do echo '{}' > "$C/web/core/$f"; done
+echo 'name: My mod' > "$C/web/modules/custom/my_mod/my_mod.info.yml"
+echo 'name: Own' > "$C/web/modules/custom/own/own.info.yml"
+echo '{"rules": {}}' > "$C/web/modules/custom/own/.eslintrc.json"
+echo 'flowdrop' > "$C/web/modules/custom/my_mod/.cspell-project-words.txt"
+# Fake core tools: log their arguments; cspell also keeps its config.
+for t in eslint stylelint prettier; do
+  printf '#!/usr/bin/env bash\necho "%s $*" >> "%s/calls"\nexit "${FAKE_%s:-0}"\n' \
+    "$t" "$C" "$(echo "$t" | tr '[:lower:]' '[:upper:]')" > "$CB/$t"
+done
+printf '#!/usr/bin/env bash\necho "cspell $*" >> "%s/calls"\ncp "$2" "%s/cspell.json"\nexit "${FAKE_CSPELL:-0}"\n' "$C" "$C" > "$CB/cspell"
+chmod +x "$CB"/*
+echo 'x;' > "$C/web/modules/custom/my_mod/js/a.js"
+echo 'a {}' > "$C/web/modules/custom/my_mod/css/a.css"
+echo 'x;' > "$C/web/modules/custom/own/js/b.js"
+corelint() {
+  : > "$C/calls"
+  out=$(file_json "$1" | CLAUDE_PROJECT_DIR="$C" bash "$HOOKS/post-generation-lint.sh" 2>"$C/err") && rc=0 || rc=$?
+}
+
+if command -v node >/dev/null; then
+  corelint "$C/web/modules/custom/my_mod/js/a.js"
+  grep -q -- '^eslint .*--no-eslintrc -c web/core/.eslintrc.passing.json' "$C/calls" \
+    && grep -q -- '--resolve-plugins-relative-to web/core' "$C/calls" \
+    && ok "lints JS with core's ESLint and CI's passing config" || bad "lints JS with core's ESLint and CI's passing config"
+  grep -q -- '^prettier --write --config web/core/.prettierrc.json' "$C/calls" \
+    && ok "formats with core's Prettier config" || bad "formats with core's Prettier config"
+  jq -e '(.words | index("my") and index("mod")) and (.dictionaries | index("project-words")) and (.flagWords | length > 0)' \
+    "$C/cspell.json" >/dev/null && ok "spell-checks like CI: module name parts, project words, flagged words" \
+    || bad "spell-checks like CI: module name parts, project words, flagged words"
+
+  corelint "$C/web/modules/custom/own/js/b.js"
+  grep -q -- '--no-eslintrc' "$C/calls" && bad "a module's own ESLint config wins" || ok "a module's own ESLint config wins"
+
+  corelint "$C/web/modules/custom/my_mod/css/a.css"
+  grep -q -- '^stylelint --config-basedir web/core --config web/core/.stylelintrc.json' "$C/calls" \
+    && ok "lints CSS with core's Stylelint config" || bad "lints CSS with core's Stylelint config"
+
+  FAKE_CSPELL=1 corelint "$C/web/modules/custom/my_mod/js/a.js"
+  [[ "$rc" -eq 2 ]] && grep -qF ".cspell-project-words.txt" "$C/err" \
+    && ok "sends spelling errors back with where to add real words" \
+    || bad "sends spelling errors back with where to add real words (exit $rc)"
+else
+  echo "  (node not found: skipping the core JS tool checks)"
+fi
+
+mv "$C/web/core/node_modules" "$C/web/core/node_modules.off"
+corelint "$C/web/modules/custom/my_mod/js/a.js"
+[[ "$rc" -eq 0 ]] && grep -qF "daw install" "$C/err" \
+  && ok "says how to install core's JS tools when they are missing" \
+  || bad "says how to install core's JS tools when they are missing (exit $rc)"
+
 echo "── post-session-phpstan: reports back once ─────"
 S="$TMP/stan"
 mkdir -p "$S/web/core" "$S/web/modules/custom/mine/src" "$S/vendor/bin"
@@ -123,6 +180,12 @@ grep -qF "configuration is broken" <<< "$out" && ok "names it a config problem, 
 fake_phpstan "Line 3: Undefined variable" 1
 expect_exit 2 "sends code errors back to Claude"      post-session-phpstan.sh "$S" '{"stop_hook_active": false}'
 expect_exit 0 "only reports on the follow-up stop"    post-session-phpstan.sh "$S" '{"stop_hook_active": true}'
+
+fake_phpstan '$*' 1
+echo '<?php' > "$S/web/modules/custom/mine/src/New.php"
+out=$(echo '{"stop_hook_active": false}' | CLAUDE_PROJECT_DIR="$S" bash "$HOOKS/post-session-phpstan.sh" 2>&1 >/dev/null || true)
+grep -qF "web/modules/custom/mine/src/New.php" <<< "$out" && ok "analyses new, untracked files" || bad "analyses new, untracked files"
+rm "$S/web/modules/custom/mine/src/New.php"
 
 fake_phpstan '$*' 1
 mkdir -p "$S/web/modules/custom/up/src"
