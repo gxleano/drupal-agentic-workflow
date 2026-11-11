@@ -216,14 +216,14 @@ install_file() {
 #
 # A project's settings.json often holds other hooks or permissions already,
 # so it is merged instead of skipped: each hook command of SOURCE that DEST
-# lacks is added under the same event. Nothing in DEST is changed or removed.
-# --force still overwrites it, like any other file.
+# lacks is added under the same event. Nothing in DEST is changed or removed,
+# not even with --force: overwriting it would drop the project's own hooks.
 # ---------------------------------------------------------------------------
 merge_settings() {
   local src="$1" dest="$2" merged
   local relative_dest="${dest#"$TARGET_DIR"/}"
 
-  if [[ ! -f "$dest" || "$FORCE" == true ]] || ! command -v jq &>/dev/null; then
+  if [[ ! -f "$dest" ]] || ! command -v jq &>/dev/null; then
     install_file "$src" "$dest"
     return
   fi

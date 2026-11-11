@@ -113,6 +113,9 @@ done
 before=$(cat "$S")
 "$DAW" update "$MERGE" >/dev/null
 [[ "$(cat "$S")" == "$before" ]] && ok "a second run adds nothing" || bad "a second run adds nothing"
+"$DAW" update "$MERGE" --force >/dev/null
+jq -e '[.. | objects | .command? // empty] | index("node other.cjs")' "$S" >/dev/null \
+  && ok "--force still keeps the project's own hooks" || bad "--force still keeps the project's own hooks"
 
 echo ""
 echo "smoke: $PASS passed, $FAIL failed"
