@@ -90,5 +90,39 @@ if echo "$COMMAND" | grep -qiE 'DROP\s+(TABLE|DATABASE)\b'; then
   block "DROP TABLE/DATABASE — permanently destroys database objects"
 fi
 
+# ── Local secrets reaching git ───────────────────────────────────────────────
+# .env files and settings.local.php hold credentials. `.env.example`-style
+# templates are fine, so only the real files match.
+SECRET_RE='(^|/)(\.env|\.env\.local|\.env\.[^/]+\.local|settings\.local\.php)$'
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+
+# Print the first secret path read from stdin, if any. (Blocking happens in
+# the caller: `exit` inside a piped loop would only leave the subshell.)
+first_secret() {
+  grep -E "$SECRET_RE" | head -n 1 || true
+}
+
+block_if_secret() {
+  [[ -n "$2" ]] && block "$1 would put $2 into git — it holds local secrets"
+  return 0
+}
+
+if echo "$COMMAND" | grep -qE 'git\s+add\b'; then
+  # Explicit paths, including `git add -f`, which bypasses .gitignore.
+  block_if_secret "git add" "$(echo "$COMMAND" | tr -s ' \t;&|' '\n' | first_secret)"
+  # `git add -A` / `--all` / `.` picks up untracked files that are not ignored.
+  if echo "$COMMAND" | grep -qE 'git\s+add\s+(.*\s)?(-A|--all|\.)(\s|$)'; then
+    block_if_secret "git add" "$(git -C "$PROJECT_DIR" ls-files --others --exclude-standard 2>/dev/null | first_secret)"
+  fi
+fi
+
+if echo "$COMMAND" | grep -qE 'git\s+commit\b'; then
+  block_if_secret "git commit" "$(git -C "$PROJECT_DIR" diff --cached --name-only 2>/dev/null | first_secret)"
+  # `commit -a` also commits modified tracked files.
+  if echo "$COMMAND" | grep -qE 'git\s+commit\s+(.*\s)?(-[a-zA-Z]*a[a-zA-Z]*|--all)(\s|$)'; then
+    block_if_secret "git commit -a" "$(git -C "$PROJECT_DIR" diff --name-only 2>/dev/null | first_secret)"
+  fi
+fi
+
 # ── All clear ────────────────────────────────────────────────────────────────
 exit 0

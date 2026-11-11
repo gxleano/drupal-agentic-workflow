@@ -61,6 +61,9 @@ fi
 stage "smoke (setup.sh e2e)"
 bash tests/smoke.sh || fail "smoke"
 
+stage "hooks"
+bash tests/hooks.sh || fail "hooks"
+
 echo ""
 if [[ "$FAILED" -eq 0 ]]; then
   echo "ALL STAGES PASSED"

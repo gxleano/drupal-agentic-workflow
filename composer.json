@@ -1,6 +1,6 @@
 {
   "name": "gxleano/drupal-agentic-workflow",
-  "description": "Turn Claude Code and other AGENTS.md-aware agents into a Drupal-expert development partner: skills, safety/quality hooks, and ground-truth project-context generation.",
+  "description": "Hooks, a working PHPStan config, an on-demand site index and a short AGENTS.md template for Claude Code and other AGENTS.md-aware agents in Drupal projects.",
   "type": "library",
   "license": "GPL-2.0-or-later",
   "keywords": [

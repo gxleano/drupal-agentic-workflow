@@ -10,10 +10,9 @@
 #
 # Subcommands:
 #   install [TARGET] [opts]   Full (interactive) install — alias for setup.sh.
-#   update  [TARGET] [opts]   Non-interactive refresh: re-copies .claude/, refreshes
-#                             CLAUDE.md/AGENTS.md managed blocks, and regenerates the
-#                             detected context (stack/conventions/map/version/site-api).
-#                             Never prompts; preserves customized files.
+#   update  [TARGET] [opts]   Non-interactive refresh: re-copies hooks, skills and
+#                             the site-api tool. Never prompts; never touches AGENTS.md,
+#                             CLAUDE.md or customized files.
 #   version                   Print the installed version.
 #   help                      Show this help.
 #
@@ -53,9 +52,8 @@ case "$sub" in
     exec "$SETUP" "$@"
     ;;
   update)
-    # Non-interactive: skip tool-install offers, the module-analysis prompt, and
-    # the end-of-run follow-ups. Generated context (Phase 7*) still refreshes.
-    exec "$SETUP" --skip-tools --skip-ai-context --skip-followups "$@"
+    # Non-interactive: skip the tool-install offers, the only prompts left.
+    exec "$SETUP" --skip-tools "$@"
     ;;
   version | --version | -v)
     cmd_version

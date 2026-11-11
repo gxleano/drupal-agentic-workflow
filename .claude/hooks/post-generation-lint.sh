@@ -1,11 +1,23 @@
 #!/usr/bin/env bash
 #
 # Post-generation hook for Claude Code.
-# Detects changed file types and runs the appropriate linters,
-# plus fast grep-based security & performance checks for PHP.
+# Detects changed file types and runs the appropriate linters.
 # Exit code 2 = blocking error (fed back to Claude as feedback).
 #
 set -euo pipefail
+
+# Claude Code ignores any exit code but 0 and 2, so a crash would pass in
+# silence and the file would look checked. Any other exit (set -e, a missing
+# command) becomes exit 2 with a note, so it reaches Claude. An EXIT trap, not
+# ERR: it is not inherited by $(…), where tools exit 1 on purpose.
+on_exit() {
+  local rc=$?
+  if [[ "$rc" -ne 0 && "$rc" -ne 2 ]]; then
+    echo "post-generation-lint.sh failed unexpectedly (exit $rc); the file was not checked." >&2
+    exit 2
+  fi
+}
+trap on_exit EXIT
 
 # ── Read hook input from stdin ───────────────────────────────────────────────
 INPUT=$(cat)
@@ -19,11 +31,20 @@ fi
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 
 # Shared PHP tool resolution (DDEV → vendor/bin → $PATH → global Composer).
-source "$(dirname "$0")/lib/php-tools.sh"
+HOOK_LIB="$(dirname "$0")/lib/php-tools.sh"
+if [[ ! -f "$HOOK_LIB" ]]; then
+  echo "post-generation-lint.sh: $HOOK_LIB is missing, so no file is linted." >&2
+  echo "Reinstall the hooks (vendor/bin/daw update) or ask the user to." >&2
+  exit 2
+fi
+# shellcheck source=lib/php-tools.sh
+source "$HOOK_LIB"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 ERRORS=0
 TOOLS_RUN=()
+# A note for Claude that is not an error (sent as context with exit 0).
+NOTE=""
 
 log_header() {
   echo "──────────────────────────────────────────────" >&2
@@ -132,12 +153,61 @@ is_prettier_target() {
   return 1
 }
 
+# A file inside a git submodule belongs to an upstream project with its own
+# standards and CI. It is still checked, against the submodule's own ruleset,
+# but never auto-fixed: that would put formatting changes nobody asked for
+# into someone else's repository. Sets SUBMODULE to the submodule's path.
+SUBMODULE=""
+in_submodule() {
+  [[ -f "$PROJECT_DIR/.gitmodules" ]] || return 1
+  local rel="${FILE_PATH#"$PROJECT_DIR"/}" path
+  while IFS= read -r path; do
+    if [[ -n "$path" && "$rel" == "$path"/* ]]; then
+      SUBMODULE="$path"
+      return 0
+    fi
+  done < <(git config -f "$PROJECT_DIR/.gitmodules" --get-regexp '\.path$' 2>/dev/null | awk '{print $2}')
+  return 1
+}
+
+# Finds the nearest config file named in $@ from the edited file's directory
+# up to the project root, so a tool only runs where it has been set up.
+find_config() {
+  local dir
+  dir="$(dirname "$FILE_PATH")"
+  while :; do
+    local name
+    for name in "$@"; do
+      if [[ -f "$dir/$name" ]]; then
+        echo "$dir/$name"
+        return 0
+      fi
+    done
+    [[ "$dir" == "$PROJECT_DIR" || "$dir" == "/" || "$dir" == "." ]] && return 1
+    dir="$(dirname "$dir")"
+  done
+}
+
+# A linter that cannot load its config says nothing about the file: e.g.
+# ESLint 9+ ignores the .eslintrc.json Drupal core ships. Reported as a setup
+# problem, not sent back as a code error.
+is_js_setup_failure() {
+  grep -qiE "couldn't find (an eslint\.config|a configuration)|Oops! Something went wrong|No configuration provided|Cannot find module" <<< "$1"
+}
+
+# A local or global install only: plain `npx` would download the package
+# when it is missing, which is slow and can hang on a prompt.
+npx_tool() {
+  npx --no-install "$@"
+}
+
 # Skip files outside the project or in vendor/contrib/core directories.
 is_lintable() {
   case "$FILE_PATH" in
     */vendor/*|*/node_modules/*|*/web/core/*|*/web/modules/contrib/*|*/web/themes/contrib/*|*/web/profiles/*)
       return 1 ;;
   esac
+  in_submodule || true
   # File must exist.
   [[ -f "$FILE_PATH" ]]
 }
@@ -197,7 +267,14 @@ if is_backend; then
   # A ruleset file already defines its extensions, so only pass --extensions
   # for the bundled Drupal,DrupalPractice fallback.
   CS_ARGS=()
-  if [[ -f "$PROJECT_DIR/phpcs.xml" ]]; then
+  if [[ -n "$SUBMODULE" && -f "$PROJECT_DIR/$SUBMODULE/phpcs.xml" ]]; then
+    CS_ARGS=(--standard="$SUBMODULE/phpcs.xml")
+  elif [[ -n "$SUBMODULE" && -f "$PROJECT_DIR/$SUBMODULE/phpcs.xml.dist" ]]; then
+    CS_ARGS=(--standard="$SUBMODULE/phpcs.xml.dist")
+  elif [[ -n "$SUBMODULE" ]]; then
+    CS_ARGS=("--standard=Drupal,DrupalPractice"
+             "--extensions=php,module,inc,install,test,profile,theme")
+  elif [[ -f "$PROJECT_DIR/phpcs.xml" ]]; then
     CS_ARGS=(--standard=phpcs.xml)
   elif [[ -f "$PROJECT_DIR/phpcs.xml.dist" ]]; then
     CS_ARGS=(--standard=phpcs.xml.dist)
@@ -211,6 +288,9 @@ if is_backend; then
   is_setup_failure() {
     grep -qiE 'coding standard .* is not installed|ERROR: the .* standard|command not found|executable file not found' <<< "$1"
   }
+
+  # Upstream code is reported, not rewritten.
+  [[ -n "$SUBMODULE" ]] && PHPCBF_AVAILABLE=false
 
   if [[ "$PHPCS_AVAILABLE" == true && "$PHPCBF_AVAILABLE" == true ]]; then
     # --- PHPCBF (auto-fix) ---
@@ -271,92 +351,17 @@ if is_backend; then
       fi
       ERRORS=$((ERRORS + 1))
     elif [[ "$PHPCBF_FIXED" == true ]]; then
-      # phpcs is clean, but phpcbf still rewrote the file on disk this run, so
-      # Claude's in-context copy is stale. Emit a blocking note (exit 2) so the
-      # warning actually reaches Claude — otherwise the next Edit's old_string
-      # would be matched against pre-fix content and fail (or reintroduce it).
-      echo "" >&2
-      echo "  NOTE: phpcbf auto-fixed $REL_PATH on disk and phpcs now passes." >&2
-      echo "  Re-read the file before any further edit — your in-context copy is" >&2
-      echo "  stale, so an old_string from before the fix will no longer match." >&2
-      ERRORS=$((ERRORS + 1))
+      # phpcs is clean, but phpcbf rewrote the file. Nothing to fix, so it is
+      # not an error: Claude gets a note as context and carries on.
+      NOTE="phpcbf auto-fixed $REL_PATH on disk and phpcs now passes. Re-read the file before editing it again: your copy is from before the fix."
     fi
     log_tool_result "phpcs" "$PHPCS_EXIT"
   fi
-
-  # --- Security & Performance scan (local grep, no Docker — ~10-50ms) ---
-  log_tool_start "security-perf-scan"
-  TOOLS_RUN+=("security-perf-scan")
-  SCAN_ERRORS=0
-
-  # Helper: scan for a pattern (skips comment lines) and report.
-  # Uses grep -nE (POSIX extended regex) for macOS compatibility.
-  scan_pattern() {
-    local category="$1"
-    local pattern="$2"
-    local message="$3"
-    local matches
-    # Strip leading comment lines to reduce false positives, then grep.
-    matches=$(sed -E \
-      -e 's|^[[:space:]]*/\*.*\*/[[:space:]]*$||' \
-      -e 's|^[[:space:]]*//.*$||' \
-      -e 's|^[[:space:]]*\*.*$||' \
-      -e 's|^[[:space:]]*#[^!].*$||' \
-      "$FILE_PATH" | grep -nE "$pattern" 2>/dev/null || true)
-    if [[ -n "$matches" ]]; then
-      while IFS= read -r match; do
-        echo "  [$category] Line ${match%%:*}: $message" >&2
-        echo "    > ${match#*:}" >&2
-      done <<< "$matches"
-      SCAN_ERRORS=$((SCAN_ERRORS + 1))
-    fi
-  }
-
-  # ── SECURITY: high-confidence patterns (near-zero false positives) ─────
-
-  scan_pattern "SECURITY" 'eval[[:space:]]*\(' \
-    "eval() is a code injection risk. Use a safer alternative."
-  scan_pattern "SECURITY" 'shell_exec[[:space:]]*\(' \
-    "shell_exec() — command injection risk. Use Symfony Process if needed."
-  scan_pattern "SECURITY" 'passthru[[:space:]]*\(' \
-    "passthru() — command injection risk. Use Symfony Process if needed."
-  scan_pattern "SECURITY" 'proc_open[[:space:]]*\(' \
-    "proc_open() — command injection risk. Use Symfony Process if needed."
-  scan_pattern "SECURITY" '[^a-zA-Z_]popen[[:space:]]*\(' \
-    "popen() — command injection risk. Use Symfony Process if needed."
-  scan_pattern "SECURITY" '\$_(GET|POST|REQUEST|COOKIE)' \
-    "Direct superglobal access. Use \\\$request->query/request->get() via RequestStack."
-  scan_pattern "SECURITY" 'unserialize[[:space:]]*\(' \
-    "unserialize() — object injection risk. Use json_decode() or Drupal serialization."
-  scan_pattern "SECURITY" '[^a-zA-Z_]extract[[:space:]]*\(' \
-    "extract() can overwrite variables. Use explicit array access instead."
-
-  # ── PERFORMANCE: high-confidence patterns ──────────────────────────────
-
-  # \Drupal:: in src/ service classes — must use DI.
-  if [[ "$FILE_PATH" == */src/* ]]; then
-    scan_pattern "PERFORMANCE" '\\Drupal::' \
-      "\\Drupal:: service locator in src/ class. Inject via constructor instead."
-  fi
-
-  # Entity queries without accessCheck() — required in Drupal 11.
-  if grep -qE '->getQuery\(|->getAggregateQuery\(' "$FILE_PATH" 2>/dev/null; then
-    if ! grep -qE '->accessCheck\(' "$FILE_PATH" 2>/dev/null; then
-      scan_pattern "PERFORMANCE" '->getQuery\(|->getAggregateQuery\(' \
-        "Entity query without ->accessCheck(TRUE). Required by Drupal 11."
-    fi
-  fi
-
-  if [[ "$SCAN_ERRORS" -gt 0 ]]; then
-    ERRORS=$((ERRORS + SCAN_ERRORS))
-  fi
-  log_tool_result "security-perf-scan" "$SCAN_ERRORS"
-
 fi
 
 # ── Formatting: Prettier ──────────────────────────────────────────────────────
-if is_prettier_target; then
-  if command -v npx &>/dev/null && npx prettier --version &>/dev/null; then
+if is_prettier_target && [[ -z "$SUBMODULE" ]]; then
+  if command -v npx &>/dev/null && npx_tool prettier --version &>/dev/null; then
     # Check if Twig plugin is available for Twig files.
     SKIP_PRETTIER=false
     if is_twig; then
@@ -372,7 +377,7 @@ if is_prettier_target; then
       TOOLS_RUN+=("prettier")
       PRETTIER_OUTPUT=""
       PRETTIER_EXIT=0
-      PRETTIER_OUTPUT=$(npx prettier --write "$FILE_PATH" 2>&1) || PRETTIER_EXIT=$?
+      PRETTIER_OUTPUT=$(npx_tool prettier --write "$FILE_PATH" 2>&1) || PRETTIER_EXIT=$?
 
       if [[ "$PRETTIER_EXIT" -ne 0 ]]; then
         echo "$PRETTIER_OUTPUT" >&2
@@ -390,14 +395,21 @@ if is_javascript; then
   log_file "$FILE_PATH" "frontend (JavaScript/TypeScript)"
 
   # --- ESLint ---
-  if command -v npx &>/dev/null; then
+  # Without a config ESLint fails on any file, which says nothing about it.
+  if ! find_config eslint.config.js eslint.config.mjs eslint.config.cjs eslint.config.ts \
+       .eslintrc.json .eslintrc.js .eslintrc.cjs .eslintrc.yml .eslintrc.yaml .eslintrc >/dev/null; then
+    echo "  Skipping eslint: no ESLint config between the file and the project root" >&2
+  elif command -v npx &>/dev/null; then
     log_tool_start "eslint"
     TOOLS_RUN+=("eslint")
     ESLINT_OUTPUT=""
     ESLINT_EXIT=0
-    ESLINT_OUTPUT=$(npx eslint --no-error-on-unmatched-pattern "$FILE_PATH" 2>&1) || ESLINT_EXIT=$?
+    ESLINT_OUTPUT=$(npx_tool eslint --no-error-on-unmatched-pattern "$FILE_PATH" 2>&1) || ESLINT_EXIT=$?
 
-    if [[ "$ESLINT_EXIT" -ne 0 ]]; then
+    if [[ "$ESLINT_EXIT" -ne 0 ]] && is_js_setup_failure "$ESLINT_OUTPUT"; then
+      echo "  eslint could not load its config here, so the file was not checked:" >&2
+      echo "$ESLINT_OUTPUT" | head -n 5 >&2
+    elif [[ "$ESLINT_EXIT" -ne 0 ]]; then
       echo "$ESLINT_OUTPUT" >&2
       ERRORS=$((ERRORS + 1))
     fi
@@ -412,14 +424,20 @@ if is_stylesheet; then
   log_file "$FILE_PATH" "frontend (CSS/SCSS)"
 
   # --- Stylelint ---
-  if command -v npx &>/dev/null; then
+  if ! find_config .stylelintrc .stylelintrc.json .stylelintrc.js .stylelintrc.cjs .stylelintrc.yml \
+       .stylelintrc.yaml stylelint.config.js stylelint.config.mjs stylelint.config.cjs >/dev/null; then
+    echo "  Skipping stylelint: no Stylelint config between the file and the project root" >&2
+  elif command -v npx &>/dev/null; then
     log_tool_start "stylelint"
     TOOLS_RUN+=("stylelint")
     STYLELINT_OUTPUT=""
     STYLELINT_EXIT=0
-    STYLELINT_OUTPUT=$(npx stylelint "$FILE_PATH" 2>&1) || STYLELINT_EXIT=$?
+    STYLELINT_OUTPUT=$(npx_tool stylelint "$FILE_PATH" 2>&1) || STYLELINT_EXIT=$?
 
-    if [[ "$STYLELINT_EXIT" -ne 0 ]]; then
+    if [[ "$STYLELINT_EXIT" -ne 0 ]] && is_js_setup_failure "$STYLELINT_OUTPUT"; then
+      echo "  stylelint could not load its config here, so the file was not checked:" >&2
+      echo "$STYLELINT_OUTPUT" | head -n 5 >&2
+    elif [[ "$STYLELINT_EXIT" -ne 0 ]]; then
       echo "$STYLELINT_OUTPUT" >&2
       ERRORS=$((ERRORS + 1))
     fi
@@ -436,4 +454,8 @@ if [[ "$ERRORS" -gt 0 ]]; then
   exit 2
 fi
 
+if [[ -n "$NOTE" ]]; then
+  jq -cn --arg note "$NOTE" \
+    '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $note}}'
+fi
 exit 0

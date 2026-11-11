@@ -15,8 +15,8 @@
 #   ddev (when .ddev/config.yaml exists) → vendor/bin/drush → global drush.
 #
 # Exit codes: 0 = wrote a valid index; 1 = could not run / site not bootable.
-# A failure here is non-fatal for the workflow: .claude/project-map.md remains
-# the static fallback.
+# Run it when you need real identifiers, not once at setup: the index is a
+# snapshot and goes stale after the next module, field or config change.
 set -euo pipefail
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -36,7 +36,6 @@ elif command -v drush &>/dev/null; then
   DRUSH_RUNNER="drush"
 else
   echo "site-api: no Drush runner found (ddev / vendor/bin/drush / global) — skipping." >&2
-  echo "site-api: .claude/project-map.md remains the static fallback." >&2
   exit 1
 fi
 
@@ -55,7 +54,6 @@ JSON=$( cd "$PROJECT_DIR" && $DRUSH_RUNNER php:script "$SCRIPT_REL" 2>/dev/null 
 
 if [[ "$RUN_EXIT" -ne 0 || -z "$JSON" ]]; then
   echo "site-api: Drush could not bootstrap the site (is it installed / running?)." >&2
-  echo "site-api: falling back to .claude/project-map.md." >&2
   exit 1
 fi
 

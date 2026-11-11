@@ -32,9 +32,11 @@ _php_tools_composer_bin_dirs() {
 # false and let the caller fall back to a local binary.)
 php_ddev_available() {
   local project_dir="$1"
+  # `ddev status` prints a table whose wording changed across releases (v1.25
+  # says "OK"); `describe -j` reports the state as data.
   command -v ddev &>/dev/null \
     && [[ -f "$project_dir/.ddev/config.yaml" ]] \
-    && ddev status 2>/dev/null | grep -q "running"
+    && [[ "$( (cd "$project_dir" && ddev describe -j 2>/dev/null) | jq -r '.raw.status // empty' 2>/dev/null)" == "running" ]]
 }
 
 # Resolve a PHP tool, honouring the order documented above.
